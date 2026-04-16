@@ -2,7 +2,7 @@
 
 Hoverbar is a Firefox extension that mirrors your Bookmarks Toolbar as a hover-revealed overlay at the top of web pages.
 
-I used to handle this with a custom `[userChrome.css](https://github.com/aloglu/dotfiles/blob/main/.chezmoitemplates/firefox/userChrome.css)`, but I created this extension because it cannot create an auto-hiding bookmarks bar that overlays the page instead of pushing it up or down, which was annoying.
+I used to handle this with a custom [`userChrome.css`](https://github.com/aloglu/dotfiles/blob/main/.chezmoitemplates/firefox/userChrome.css), but I created this extension because it cannot create an auto-hiding bookmarks bar that overlays the page instead of pushing it up or down, which was annoying.
 
 ## Features
 
