@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hoverbar Settings</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main class="popup">
+      <header class="settings-header">
+        <p class="eyebrow">Hoverbar</p>
+        <h1>Bookmarks overlay</h1>
+        <p class="lede">
+          Tune how your Bookmarks Toolbar appears inside the page overlay.
+        </p>
+      </header>
+
+      <section class="panel" aria-label="Display settings">
+        <label class="setting-row">
+          <span class="setting-copy">
+            <strong>Show bookmark names</strong>
+            <small>Show titles next to top-level toolbar items.</small>
+          </span>
+          <input id="show-names" class="switch-input" type="checkbox" role="switch">
+          <span class="switch" aria-hidden="true"></span>
+        </label>
+
+        <label class="setting-row">
+          <span class="setting-copy">
+            <strong>Show names inside folders</strong>
+            <small>Keep folder menus readable even when the main bar stays icon-only.</small>
+          </span>
+          <input id="show-folder-names" class="switch-input" type="checkbox" role="switch">
+          <span class="switch" aria-hidden="true"></span>
+        </label>
+      </section>
+
+      <p id="status" class="status" aria-live="polite"></p>
+    </main>
+
+    <script src="options.js"></script>
+  </body>
+</html>

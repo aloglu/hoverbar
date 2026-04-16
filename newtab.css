@@ -1,0 +1,229 @@
+:root {
+  color-scheme: light dark;
+  --hoverbar-bg: color-mix(in srgb, Canvas 78%, transparent);
+  --hoverbar-fg: CanvasText;
+  --hoverbar-border: color-mix(in srgb, CanvasText 14%, transparent);
+  --hoverbar-shadow: rgba(15, 23, 42, 0.18);
+  font: 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: Canvas;
+  color: var(--hoverbar-fg);
+}
+
+body {
+  overflow: hidden;
+}
+
+.newtab-shell {
+  position: fixed;
+  inset: 0 0 auto 0;
+  color: var(--hoverbar-fg);
+}
+
+.newtab-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.newtab-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.newtab-items,
+.newtab-menu {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--hoverbar-bg);
+  color: var(--hoverbar-fg);
+  border: 1px solid var(--hoverbar-border);
+  box-shadow: 0 14px 34px -16px var(--hoverbar-shadow);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+}
+
+.newtab-items {
+  width: max-content;
+  min-width: 100%;
+  min-height: 50px;
+  padding: 7px 10px 8px;
+  justify-content: center;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  border-radius: 0 0 14px 14px;
+}
+
+.newtab-item,
+.newtab-menu-row {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.newtab-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0 8px;
+  border-radius: 11px;
+  transition: background-color 140ms ease, transform 140ms ease;
+}
+
+.newtab-button:hover,
+.newtab-button:focus-visible {
+  background: color-mix(in srgb, var(--hoverbar-fg) 10%, transparent);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.newtab-icon-wrap {
+  width: 18px;
+  height: 18px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+}
+
+.newtab-icon,
+.newtab-fallback-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+}
+
+.newtab-icon {
+  display: block;
+  object-fit: cover;
+}
+
+.newtab-fallback-icon {
+  position: relative;
+  display: inline-block;
+  border-radius: 999px;
+}
+
+.newtab-fallback-ring,
+.newtab-fallback-h,
+.newtab-fallback-v {
+  position: absolute;
+}
+
+.newtab-fallback-ring {
+  inset: 2px;
+  border-radius: 999px;
+  border: 1.5px solid color-mix(in srgb, var(--hoverbar-fg) 84%, transparent);
+}
+
+.newtab-fallback-h {
+  left: 4px;
+  right: 4px;
+  top: 8px;
+  height: 1.5px;
+  background: color-mix(in srgb, var(--hoverbar-fg) 84%, transparent);
+  box-shadow: 0 -4px 0 0 color-mix(in srgb, var(--hoverbar-fg) 84%, transparent);
+}
+
+.newtab-fallback-v {
+  top: 4px;
+  bottom: 4px;
+  left: 8px;
+  width: 1.5px;
+  background: color-mix(in srgb, var(--hoverbar-fg) 84%, transparent);
+}
+
+.newtab-folder-glyph {
+  position: relative;
+  width: 16px;
+  height: 12px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--hoverbar-fg) 18%, transparent);
+}
+
+.newtab-folder-glyph::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: -3px;
+  width: 8px;
+  height: 5px;
+  border-radius: 4px 4px 0 0;
+  background: color-mix(in srgb, var(--hoverbar-fg) 22%, transparent);
+}
+
+.newtab-label {
+  display: none;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.show-names .newtab-label {
+  display: inline;
+}
+
+.show-folder-names .newtab-label-menu {
+  display: inline;
+}
+
+.newtab-menu {
+  position: fixed;
+  min-width: 220px;
+  padding: 8px;
+  border-radius: 16px;
+  flex-direction: column;
+  align-items: stretch;
+  pointer-events: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  z-index: 2;
+}
+
+.newtab-menu::-webkit-scrollbar {
+  display: none;
+}
+
+.newtab-menu-button {
+  width: 100%;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.newtab-popups {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 720px) {
+  .newtab-items {
+    padding-inline: 8px;
+  }
+}

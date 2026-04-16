@@ -1,0 +1,9 @@
+.codex
+.env
+.env.*
+.web-ext-config.js
+.DS_Store
+Thumbs.db
+web-ext-artifacts/
+*.zip
+*.xpi

@@ -1,0 +1,165 @@
+:root {
+  color-scheme: light dark;
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --page-bg: Canvas;
+  --text: CanvasText;
+  --muted: GrayText;
+  --soft: GrayText;
+  --eyebrow: GrayText;
+  --panel: ButtonFace;
+  --panel-border: color-mix(in srgb, CanvasText 16%, transparent);
+  --divider: color-mix(in srgb, CanvasText 12%, transparent);
+  --shadow: none;
+  --switch-track: color-mix(in srgb, CanvasText 24%, transparent);
+  --switch-track-on: AccentColor;
+  --switch-thumb: Canvas;
+  --switch-focus: color-mix(in srgb, AccentColor 28%, transparent);
+  --status: AccentColor;
+}
+
+body {
+  margin: 0;
+  min-width: 340px;
+  max-width: 380px;
+  background: var(--page-bg);
+  color: var(--text);
+}
+
+.popup {
+  box-sizing: border-box;
+  width: 360px;
+  max-width: 100vw;
+  padding: 18px;
+}
+
+.settings-header {
+  margin-bottom: 14px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--eyebrow);
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 21px;
+  line-height: 1.12;
+}
+
+.lede {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.panel {
+  padding: 4px 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.setting-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px;
+  align-items: center;
+  min-height: 60px;
+  cursor: pointer;
+}
+
+.setting-row + .setting-row {
+  border-top: 1px solid var(--divider);
+}
+
+.setting-copy {
+  min-width: 0;
+}
+
+.setting-copy strong,
+.setting-copy small {
+  display: block;
+}
+
+.setting-copy strong {
+  font-size: 14px;
+}
+
+.setting-copy small {
+  margin-top: 4px;
+  color: var(--soft);
+  font-size: 12px;
+}
+
+.switch-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--switch-track);
+  box-shadow: inset 0 0 0 1px var(--panel-border);
+  transition:
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.switch::before {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--switch-thumb);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, CanvasText 24%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, CanvasText 8%, transparent);
+  content: "";
+  transition: transform 160ms ease;
+}
+
+.switch-input:checked ~ .switch {
+  background: var(--switch-track-on);
+}
+
+.switch-input:checked ~ .switch::before {
+  transform: translateX(20px);
+}
+
+.switch-input:focus-visible ~ .switch {
+  box-shadow:
+    0 0 0 4px var(--switch-focus),
+    inset 0 0 0 1px var(--panel-border);
+}
+
+.status {
+  min-height: 1.5em;
+  margin: 10px 2px 0;
+  color: var(--status);
+  font-size: 12px;
+}
+
+@supports not (color: color-mix(in srgb, CanvasText 16%, transparent)) {
+  :root {
+    --panel-border: rgba(128, 128, 128, 0.28);
+    --divider: rgba(128, 128, 128, 0.22);
+    --switch-track: rgba(128, 128, 128, 0.42);
+    --switch-focus: rgba(0, 96, 223, 0.28);
+  }
+}

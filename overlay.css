@@ -1,0 +1,267 @@
+:host {
+  all: initial;
+}
+
+.hoverbar-shell,
+.hoverbar-shell * {
+  box-sizing: border-box;
+}
+
+.hoverbar-shell [hidden] {
+  display: none !important;
+}
+
+.hoverbar-shell {
+  --hoverbar-bg: color-mix(in srgb, Canvas 78%, transparent);
+  --hoverbar-fg: CanvasText;
+  --hoverbar-border: color-mix(in srgb, CanvasText 14%, transparent);
+  --hoverbar-shadow: rgba(15, 23, 42, 0.18);
+  position: fixed;
+  inset: 0 0 auto 0;
+  width: 100%;
+  z-index: 2147483647;
+  pointer-events: none;
+  overflow: visible;
+  font: 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--hoverbar-fg);
+}
+
+.hoverbar-hitbox {
+  position: absolute;
+  inset: -8px 0 auto 0;
+  height: 10px;
+  width: 100%;
+  pointer-events: auto;
+  background: transparent;
+}
+
+.hoverbar-panel {
+  pointer-events: auto;
+  display: flex;
+  width: 100%;
+  padding: 0;
+  transform: translateY(-100%);
+  transition:
+    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 180ms ease;
+  opacity: 0;
+}
+
+.hoverbar-shell:hover .hoverbar-panel,
+.hoverbar-shell.always-visible .hoverbar-panel,
+.hoverbar-shell.grace-open .hoverbar-panel,
+.hoverbar-shell.menus-open .hoverbar-panel,
+.hoverbar-shell:focus-within .hoverbar-panel {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.hoverbar-shell.suppress-open:not(.always-visible) .hoverbar-panel {
+  transform: translateY(-100%);
+  opacity: 0;
+}
+
+.hoverbar-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: none;
+}
+
+.hoverbar-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.hoverbar-items,
+.hoverbar-menu {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--hoverbar-bg);
+  color: var(--hoverbar-fg);
+  border: 1px solid var(--hoverbar-border);
+  border-radius: 0 0 18px 18px;
+  box-shadow: 0 14px 34px -16px var(--hoverbar-shadow);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+}
+
+.hoverbar-items {
+  width: max-content;
+  min-width: 100%;
+  min-height: 50px;
+  margin-top: 0;
+  padding: 7px 10px 8px;
+  justify-content: center;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  border-radius: 0 0 14px 14px;
+}
+
+.hoverbar-item {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.hoverbar-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0 8px;
+  border-radius: 11px;
+  transition:
+    background-color 140ms ease,
+    transform 140ms ease;
+}
+
+.hoverbar-button:hover,
+.hoverbar-button:focus-visible {
+  background: color-mix(in srgb, var(--hoverbar-fg) 10%, transparent);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.hoverbar-icon-wrap {
+  width: 18px;
+  height: 18px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+}
+
+.hoverbar-icon,
+.hoverbar-fallback-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+}
+
+.hoverbar-icon {
+  display: block;
+  object-fit: cover;
+}
+
+.hoverbar-fallback-icon {
+  position: relative;
+  display: inline-block;
+  border-radius: 999px;
+}
+
+.hoverbar-fallback-ring,
+.hoverbar-fallback-h,
+.hoverbar-fallback-v {
+  position: absolute;
+}
+
+.hoverbar-fallback-ring {
+  inset: 2px;
+  border-radius: 999px;
+  border: 1.5px solid color-mix(in srgb, var(--hoverbar-fg) 84%, transparent);
+}
+
+.hoverbar-fallback-h {
+  left: 4px;
+  right: 4px;
+  top: 8px;
+  height: 1.5px;
+  background: color-mix(in srgb, var(--hoverbar-fg) 84%, transparent);
+  box-shadow: 0 -4px 0 0 color-mix(in srgb, var(--hoverbar-fg) 84%, transparent);
+}
+
+.hoverbar-fallback-v {
+  top: 4px;
+  bottom: 4px;
+  left: 8px;
+  width: 1.5px;
+  background: color-mix(in srgb, var(--hoverbar-fg) 84%, transparent);
+}
+
+.hoverbar-folder-glyph {
+  position: relative;
+  width: 16px;
+  height: 12px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--hoverbar-fg) 18%, transparent);
+}
+
+.hoverbar-folder-glyph::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: -3px;
+  width: 8px;
+  height: 5px;
+  border-radius: 4px 4px 0 0;
+  background: color-mix(in srgb, var(--hoverbar-fg) 22%, transparent);
+}
+
+.hoverbar-label {
+  display: none;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.show-names .hoverbar-label {
+  display: inline;
+}
+
+.show-folder-names .hoverbar-label-menu {
+  display: inline;
+}
+
+.hoverbar-menu {
+  position: fixed;
+  min-width: 220px;
+  padding: 8px;
+  border-radius: 16px;
+  flex-direction: column;
+  align-items: stretch;
+  pointer-events: auto;
+  z-index: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.hoverbar-menu::-webkit-scrollbar {
+  display: none;
+}
+
+.hoverbar-menu-row {
+  position: relative;
+}
+
+.hoverbar-menu-button {
+  width: 100%;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.hoverbar-popups {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2147483647;
+}
+
+@media (max-width: 720px) {
+  .hoverbar-items {
+    padding-inline: 8px;
+  }
+}
