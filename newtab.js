@@ -1,7 +1,10 @@
 const TOOLBAR_ROOT_ID = "toolbar_____";
 const DEFAULT_SETTINGS = {
   showNames: false,
-  showFolderNames: true
+  showFolderNames: true,
+  folderColor: "",
+  folderIconMode: "emoji",
+  faviconCache: {}
 };
 
 init().catch((error) => {
@@ -13,11 +16,16 @@ async function init() {
   const scrollContainer = document.querySelector(".newtab-scroll");
   const itemsContainer = document.querySelector(".newtab-items");
   const popupLayer = document.querySelector(".newtab-popups");
+  const contextMenu = document.querySelector(".newtab-context-menu");
 
   let state = null;
   let openMenuPath = [];
   let anchorMap = new Map();
+  let itemMap = new Map();
   let closeTimer = null;
+  let draggedItem = null;
+  let dragOpenTimer = null;
+  let dragOpenTargetId = null;
   const menuScrollTops = new Map();
   const POINTER_GRACE_PX = 10;
 
@@ -31,7 +39,27 @@ async function init() {
     }
 
     openMenuPath = normalized;
-    render();
+    syncOpenMenuState();
+  }
+
+  function setOpenMenuPathForDrag(nextPath) {
+    const normalized = nextPath ?? [];
+    if (
+      normalized.length === openMenuPath.length &&
+      normalized.every((value, index) => value === openMenuPath[index])
+    ) {
+      return;
+    }
+
+    openMenuPath = normalized;
+    syncOpenMenuState();
+  }
+
+  function syncOpenMenuState() {
+    for (const button of document.querySelectorAll("[data-path-key]")) {
+      button.setAttribute("aria-expanded", String(openMenuPath.includes(button.dataset.pathKey)));
+    }
+    renderPopups();
   }
 
   function closeMenus() {
@@ -46,6 +74,10 @@ async function init() {
   }
 
   function scheduleClose() {
+    if (draggedItem) {
+      return;
+    }
+
     window.clearTimeout(closeTimer);
     closeTimer = window.setTimeout(() => {
       closeMenus();
@@ -58,6 +90,7 @@ async function init() {
     }
 
     anchorMap = new Map();
+    itemMap = buildItemMap(state.items);
     shell.classList.toggle("show-names", Boolean(state.settings.showNames));
     shell.classList.toggle("show-folder-names", Boolean(state.settings.showFolderNames));
     itemsContainer.replaceChildren(...state.items.map((item, index) => renderItem(item, `${index}`)));
@@ -77,6 +110,7 @@ async function init() {
     button.type = "button";
     button.className = "newtab-button newtab-folder";
     button.dataset.pathKey = pathKey;
+    setItemDataset(button, item);
     button.title = item.title;
     button.append(buildIcon(item), buildLabel(item.title));
     anchorMap.set(pathKey, button);
@@ -86,6 +120,7 @@ async function init() {
       event.stopPropagation();
       setOpenMenuPath(openMenuPath.includes(pathKey) ? [] : buildPathChain(pathKey));
     });
+    bindItemInteractions(button, item);
     wrapper.append(button);
     return wrapper;
   }
@@ -107,6 +142,7 @@ async function init() {
         button.type = "button";
         button.className = "newtab-button newtab-folder newtab-menu-button";
         button.dataset.pathKey = pathKey;
+        setItemDataset(button, child);
         button.title = child.title;
         button.append(buildIcon(child), buildLabel(child.title, true));
         anchorMap.set(pathKey, button);
@@ -116,6 +152,7 @@ async function init() {
           event.stopPropagation();
           setOpenMenuPath(openMenuPath.includes(pathKey) ? buildPathChain(parentPath) : buildPathChain(pathKey));
         });
+        bindItemInteractions(button, child);
         row.append(button);
       }
 
@@ -127,11 +164,9 @@ async function init() {
   }
 
   function renderPopups() {
-    const existingMenus = new Map();
     for (const menu of popupLayer.querySelectorAll(".newtab-menu")) {
       if (menu.dataset.pathKey) {
         menuScrollTops.set(menu.dataset.pathKey, menu.scrollTop);
-        existingMenus.set(menu.dataset.pathKey, menu);
       }
     }
 
@@ -144,10 +179,7 @@ async function init() {
         continue;
       }
 
-      const menu = existingMenus.get(pathKey) || createMenu(node.children, pathKey);
-      if (existingMenus.has(pathKey)) {
-        remapMenuAnchors(menu);
-      }
+      const menu = createMenu(node.children, pathKey);
       positionMenu(menu, anchor, pathKey);
     }
   }
@@ -210,11 +242,344 @@ async function init() {
     anchor.className = inMenu ? "newtab-button newtab-menu-button" : "newtab-button";
     anchor.href = item.url;
     anchor.title = item.title;
+    setItemDataset(anchor, item);
     anchor.append(buildIcon(item), buildLabel(item.title, inMenu));
     anchor.addEventListener("click", () => {
       setOpenMenuPath([]);
     });
+    bindItemInteractions(anchor, item);
     return anchor;
+  }
+
+  function setItemDataset(element, item) {
+    element.dataset.bookmarkId = item.id;
+    element.dataset.bookmarkType = item.type;
+    if (item.parentId) {
+      element.dataset.parentId = item.parentId;
+    }
+    if (Number.isInteger(item.index)) {
+      element.dataset.index = String(item.index);
+    }
+    if (item.url) {
+      element.dataset.url = item.url;
+    }
+  }
+
+  function bindItemInteractions(element, item) {
+    element.draggable = true;
+    element.addEventListener("dragstart", (event) => {
+      hideContextMenu();
+      draggedItem = item;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/x-hoverbar-bookmark-id", item.id);
+      event.dataTransfer.setData("text/plain", item.url || item.title);
+      element.classList.add("is-dragging");
+    });
+    element.addEventListener("dragend", () => {
+      draggedItem = null;
+      cancelDragOpen();
+      clearDropTargets();
+      element.classList.remove("is-dragging");
+    });
+    element.addEventListener("dragover", (event) => {
+      if (!canDropOn(item)) {
+        return;
+      }
+
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      markDropTarget(element, getDropOperation(item, event));
+      scheduleDragOpen(item);
+    });
+    element.addEventListener("dragenter", (event) => {
+      if (!canDropOn(item)) {
+        return;
+      }
+
+      event.preventDefault();
+      scheduleDragOpen(item);
+    });
+    element.addEventListener("dragleave", () => {
+      element.classList.remove("drop-before", "drop-after", "drop-inside");
+    });
+    element.addEventListener("drop", (event) => {
+      if (!canDropOn(item)) {
+        return;
+      }
+
+      event.preventDefault();
+      hideContextMenu();
+      cancelDragOpen();
+      moveDraggedItem(item, getDropOperation(item, event)).catch((error) => {
+        console.warn("Hoverbar bookmark move failed", error);
+      });
+    });
+    element.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showContextMenu(item, event.clientX, event.clientY);
+    });
+  }
+
+  function scheduleDragOpen(item) {
+    if (item.type !== "folder") {
+      cancelDragOpen();
+      return;
+    }
+
+    if (dragOpenTargetId === item.id && dragOpenTimer) {
+      return;
+    }
+
+    window.clearTimeout(dragOpenTimer);
+    dragOpenTargetId = item.id;
+    dragOpenTimer = window.setTimeout(() => {
+      if (dragOpenTargetId !== item.id) {
+        return;
+      }
+
+      const pathKey = findPathById(item.id);
+      if (pathKey) {
+        setOpenMenuPathForDrag(buildPathChain(pathKey));
+      }
+      dragOpenTimer = null;
+    }, 220);
+  }
+
+  function cancelDragOpen(item = null) {
+    if (item && dragOpenTargetId !== item.id) {
+      return;
+    }
+
+    window.clearTimeout(dragOpenTimer);
+    dragOpenTimer = null;
+    dragOpenTargetId = null;
+  }
+
+  function syncDragOpenToPoint(clientX, clientY) {
+    if (!draggedItem) {
+      return;
+    }
+
+    const folderButton = folderButtonFromPoint(clientX, clientY);
+    if (!folderButton) {
+      cancelDragOpen();
+      return;
+    }
+
+    const folder = itemMap.get(folderButton.dataset.bookmarkId);
+    if (canDropOn(folder)) {
+      scheduleDragOpen(folder);
+    }
+  }
+
+  function folderButtonFromPoint(clientX, clientY) {
+    for (const button of document.querySelectorAll(".newtab-folder[data-path-key]")) {
+      if (button.dataset.bookmarkId === draggedItem?.id) {
+        continue;
+      }
+
+      if (pointInRect(clientX, clientY, expandRect(button.getBoundingClientRect(), 4))) {
+        return button;
+      }
+    }
+
+    return null;
+  }
+
+  function buildItemMap(items, map = new Map()) {
+    for (const item of items ?? []) {
+      map.set(item.id, item);
+      buildItemMap(item.children, map);
+    }
+    return map;
+  }
+
+  function findPathById(id, items = state?.items ?? [], prefix = "") {
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      const pathKey = prefix ? `${prefix}.${index}` : `${index}`;
+      if (item.id === id) {
+        return pathKey;
+      }
+      const childPath = findPathById(id, item.children ?? [], pathKey);
+      if (childPath) {
+        return childPath;
+      }
+    }
+    return null;
+  }
+
+  function canDropOn(target) {
+    if (!draggedItem || !target || draggedItem.id === target.id) {
+      return false;
+    }
+
+    if (draggedItem.type === "folder" && isDescendant(target, draggedItem.id)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function isDescendant(item, ancestorId) {
+    let current = item;
+    while (current?.parentId) {
+      if (current.parentId === ancestorId) {
+        return true;
+      }
+      current = itemMap.get(current.parentId);
+    }
+    return false;
+  }
+
+  function getDropOperation(target, event) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const horizontal = !event.currentTarget.closest(".newtab-menu");
+    const coordinate = horizontal ? event.clientX - rect.left : event.clientY - rect.top;
+    const size = horizontal ? rect.width : rect.height;
+
+    if (coordinate < size * 0.28) {
+      return "before";
+    }
+
+    if (coordinate > size * 0.72) {
+      return "after";
+    }
+
+    return target.type === "folder" ? "inside" : "after";
+  }
+
+  function markDropTarget(element, operation) {
+    clearDropTargets();
+    element.classList.add(`drop-${operation}`);
+  }
+
+  function clearDropTargets() {
+    for (const element of document.querySelectorAll(".drop-before, .drop-after, .drop-inside")) {
+      element.classList.remove("drop-before", "drop-after", "drop-inside");
+    }
+  }
+
+  async function moveDraggedItem(target, operation) {
+    if (!canDropOn(target)) {
+      return;
+    }
+
+    clearDropTargets();
+
+    if (operation === "inside" && target.type === "folder") {
+      await browser.runtime.sendMessage({
+        type: "hoverbar:move-bookmark",
+        payload: {
+          id: draggedItem.id,
+          parentId: target.id
+        }
+      });
+      return;
+    }
+
+    if (!target.parentId || !Number.isInteger(target.index)) {
+      return;
+    }
+
+    await browser.runtime.sendMessage({
+      type: "hoverbar:move-bookmark",
+      payload: {
+        id: draggedItem.id,
+        parentId: target.parentId,
+        index: destinationIndex(target, operation)
+      }
+    });
+  }
+
+  function destinationIndex(target, operation) {
+    let index = target.index + (operation === "after" ? 1 : 0);
+    if (draggedItem.parentId === target.parentId && Number.isInteger(draggedItem.index) && draggedItem.index < target.index) {
+      index -= 1;
+    }
+    return Math.max(0, index);
+  }
+
+  function showContextMenu(item, clientX, clientY) {
+    if (!contextMenu) {
+      return;
+    }
+
+    contextMenu.replaceChildren();
+    contextMenu.append(
+      createContextAction("Open in New Tab", () => openItem(item, "tab"), !item.url),
+      createContextAction("Open in New Window", () => openItem(item, "window"), !item.url),
+      createContextSeparator(),
+      createContextAction(`Delete ${item.type === "folder" ? "Folder" : "Bookmark"}`, () => removeItem(item))
+    );
+    contextMenu.hidden = false;
+    contextMenu.style.left = "0px";
+    contextMenu.style.top = "0px";
+
+    const rect = contextMenu.getBoundingClientRect();
+    const padding = 8;
+    const left = Math.min(clientX, document.documentElement.clientWidth - rect.width - padding);
+    const top = Math.min(clientY, document.documentElement.clientHeight - rect.height - padding);
+    contextMenu.style.left = `${Math.max(padding, left)}px`;
+    contextMenu.style.top = `${Math.max(padding, top)}px`;
+  }
+
+  function createContextAction(label, action, disabled = false) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "newtab-context-action";
+    button.textContent = label;
+    button.disabled = disabled;
+    button.addEventListener("click", () => {
+      hideContextMenu();
+      action();
+    });
+    return button;
+  }
+
+  function createContextSeparator() {
+    const separator = document.createElement("div");
+    separator.className = "newtab-context-separator";
+    separator.setAttribute("role", "separator");
+    return separator;
+  }
+
+  function hideContextMenu() {
+    if (contextMenu) {
+      contextMenu.hidden = true;
+    }
+  }
+
+  async function openItem(item, where) {
+    if (!item.url) {
+      return;
+    }
+
+    await browser.runtime.sendMessage({
+      type: "hoverbar:open-bookmark",
+      payload: {
+        url: item.url,
+        where
+      }
+    });
+    setOpenMenuPath([]);
+  }
+
+  async function removeItem(item) {
+    const confirmed = window.confirm(`Delete ${item.type === "folder" ? "folder" : "bookmark"} "${item.title}"?`);
+    if (!confirmed) {
+      return;
+    }
+
+    await browser.runtime.sendMessage({
+      type: "hoverbar:remove-bookmark",
+      payload: {
+        id: item.id,
+        type: item.type
+      }
+    });
+    setOpenMenuPath([]);
   }
 
   function buildIcon(item) {
@@ -222,43 +587,81 @@ async function init() {
     iconWrap.className = "newtab-icon-wrap";
 
     if (item.type === "folder") {
-      const folder = document.createElement("span");
-      folder.className = "newtab-folder-glyph";
-      iconWrap.append(folder);
+      iconWrap.classList.add("newtab-folder-icon-wrap");
+      iconWrap.append(...buildFolderIconParts(item));
       return iconWrap;
     }
 
     const img = document.createElement("img");
     img.className = "newtab-icon";
     img.alt = "";
-    const candidates = faviconCandidates(item.url);
+    const candidates = faviconCandidates(item.url, state?.faviconCache);
     if (candidates.length > 0) {
       img.src = candidates[0];
       img.dataset.index = "0";
       img.dataset.candidates = JSON.stringify(candidates);
       img.addEventListener("error", rotateFaviconSource);
+    } else {
+      img.hidden = true;
     }
 
     const fallback = document.createElement("span");
     fallback.className = "newtab-fallback-icon";
     fallback.hidden = Boolean(img.src);
-    fallback.innerHTML = `
-      <span class="newtab-fallback-ring"></span>
-      <span class="newtab-fallback-h"></span>
-      <span class="newtab-fallback-v"></span>
-    `;
+    fallback.textContent = fallbackInitial(item);
 
     if (img.src) {
       img.addEventListener("load", () => {
+        img.hidden = false;
         fallback.hidden = true;
-      });
-      img.addEventListener("error", () => {
-        fallback.hidden = false;
+        cacheFavicon(item.url, img.currentSrc || img.src);
       });
     }
 
     iconWrap.append(img, fallback);
     return iconWrap;
+  }
+
+  function buildFolderIconParts(item) {
+    const emoji = singleEmoji(item.title);
+    const mode = state?.settings?.folderIconMode || "emoji";
+
+    if (emoji && mode === "emoji") {
+      return [createFolderEmoji(emoji)];
+    }
+
+    const folder = createFolderGlyph();
+    if (emoji && mode === "both") {
+      return [folder, createFolderEmoji(emoji, true)];
+    }
+
+    return [folder];
+  }
+
+  function createFolderGlyph() {
+    const folder = document.createElement("span");
+    folder.className = "newtab-folder-glyph";
+    folder.setAttribute("aria-hidden", "true");
+    if (state?.settings?.folderColor) {
+      folder.style.setProperty("--hoverbar-folder-color", state.settings.folderColor);
+      folder.style.backgroundColor = state.settings.folderColor;
+    }
+
+    const tab = document.createElement("span");
+    tab.className = "newtab-folder-tab";
+    if (state?.settings?.folderColor) {
+      tab.style.backgroundColor = state.settings.folderColor;
+    }
+    folder.append(tab);
+    return folder;
+  }
+
+  function createFolderEmoji(emoji, badge = false) {
+    const element = document.createElement("span");
+    element.className = badge ? "newtab-folder-emoji newtab-folder-emoji-badge" : "newtab-folder-emoji";
+    element.setAttribute("aria-hidden", "true");
+    element.textContent = emoji;
+    return element;
   }
 
   function buildLabel(title, inMenu = false) {
@@ -270,35 +673,83 @@ async function init() {
 
   function rotateFaviconSource(event) {
     const img = event.currentTarget;
+    const fallback = img.nextElementSibling;
     const candidates = JSON.parse(img.dataset.candidates || "[]");
     const currentIndex = Number(img.dataset.index || 0);
     const nextIndex = currentIndex + 1;
 
     if (nextIndex >= candidates.length) {
-      img.remove();
+      img.hidden = true;
+      if (fallback) {
+        fallback.hidden = false;
+      }
       return;
     }
 
+    if (fallback) {
+      fallback.hidden = true;
+    }
     img.dataset.index = String(nextIndex);
     img.src = candidates[nextIndex];
   }
 
-  function faviconCandidates(url) {
+  function cacheFavicon(url, href) {
+    try {
+      const host = new URL(url).hostname;
+      browser.runtime.sendMessage({
+        type: "hoverbar:cache-favicon",
+        payload: { host, href }
+      }).catch(() => {});
+    } catch {
+      // Ignore invalid bookmark URLs.
+    }
+  }
+
+  function faviconCandidates(url, cache = {}) {
     try {
       const parsed = new URL(url);
       if (!/^https?:$/.test(parsed.protocol)) {
         return [];
       }
 
-      return [
-        `https://icons.duckduckgo.com/ip3/${parsed.hostname}.ico`,
-        `${parsed.origin}/favicon.ico`,
-        `${parsed.origin}/apple-touch-icon.png`,
-        `${parsed.origin}/apple-touch-icon-precomposed.png`
+      const candidates = [
+        cache?.[parsed.hostname]?.startsWith("data:image/") ? cache[parsed.hostname] : null
       ];
+
+      return candidates.filter(Boolean);
     } catch {
       return [];
     }
+  }
+
+  function fallbackInitial(item) {
+    const source = item.title || friendlyHostname(item.url);
+    return source.trim().slice(0, 1).toUpperCase() || "?";
+  }
+
+  function friendlyHostname(url) {
+    try {
+      return new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      return "";
+    }
+  }
+
+  function singleEmoji(value) {
+    const title = (value || "").trim();
+    if (!title) {
+      return null;
+    }
+
+    const graphemes = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
+      ? Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(title), (part) => part.segment)
+      : Array.from(title);
+
+    if (graphemes.length !== 1) {
+      return null;
+    }
+
+    return /\p{Extended_Pictographic}/u.test(graphemes[0]) ? graphemes[0] : null;
   }
 
   function buildPathChain(pathKey) {
@@ -439,6 +890,7 @@ async function init() {
     setVar("--hoverbar-fg", theme.foreground);
     setVar("--hoverbar-border", theme.border);
     setVar("--hoverbar-shadow", theme.shadow);
+    setVar("--hoverbar-folder-color", state.settings.folderColor);
     document.documentElement.style.colorScheme = theme.mode || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   }
 
@@ -463,11 +915,32 @@ async function init() {
     state = {
       settings: {
         showNames: Boolean(settings.showNames),
-        showFolderNames: Boolean(settings.showFolderNames)
+        showFolderNames: Boolean(settings.showFolderNames),
+        folderColor: typeof settings.folderColor === "string" ? settings.folderColor : "",
+        folderIconMode: normalizeFolderIconMode(settings.folderIconMode)
       },
       items: sanitizeNodes(subtree?.[0]?.children ?? []),
-      theme: buildTheme(theme)
+      theme: buildTheme(theme),
+      faviconCache: sanitizeFaviconCache(settings.faviconCache)
     };
+  }
+
+  function sanitizeFaviconCache(cache) {
+    if (!cache || typeof cache !== "object" || Array.isArray(cache)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(cache).filter(([host, href]) => (
+        typeof host === "string" &&
+        typeof href === "string" &&
+        (/^https?:\/\//.test(href) || /^data:image\//.test(href))
+      ))
+    );
+  }
+
+  function normalizeFolderIconMode(value) {
+    return ["emoji", "folder", "both"].includes(value) ? value : "emoji";
   }
 
   function sanitizeNodes(nodes) {
@@ -475,6 +948,8 @@ async function init() {
       .filter((node) => node && node.type !== "separator")
       .map((node) => ({
         id: node.id,
+        parentId: node.parentId || null,
+        index: Number.isInteger(node.index) ? node.index : null,
         title: node.title || friendlyTitle(node.url),
         url: node.url || null,
         type: node.url ? "bookmark" : "folder",
@@ -567,7 +1042,25 @@ async function init() {
   }
 
   document.addEventListener("click", (event) => {
+    hideContextMenu();
     if (!event.composedPath().some((node) => node instanceof Element && node.closest?.(".newtab-shell"))) {
+      closeMenus();
+    }
+  });
+
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!event.composedPath().includes(contextMenu)) {
+        hideContextMenu();
+      }
+    },
+    true
+  );
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      hideContextMenu();
       closeMenus();
     }
   });
@@ -605,6 +1098,18 @@ async function init() {
     true
   );
 
+  document.addEventListener(
+    "dragover",
+    (event) => {
+      if (!draggedItem) {
+        return;
+      }
+
+      syncDragOpenToPoint(event.clientX, event.clientY);
+    },
+    true
+  );
+
   scrollContainer.addEventListener(
     "wheel",
     (event) => {
@@ -624,29 +1129,35 @@ async function init() {
 
   browser.bookmarks.onCreated.addListener(async () => {
     await loadState();
+    setThemeVars(state.theme);
     render();
   });
   browser.bookmarks.onRemoved.addListener(async () => {
     await loadState();
+    setThemeVars(state.theme);
     render();
   });
   browser.bookmarks.onChanged.addListener(async () => {
     await loadState();
+    setThemeVars(state.theme);
     render();
   });
   browser.bookmarks.onMoved.addListener(async () => {
     await loadState();
+    setThemeVars(state.theme);
     render();
   });
   browser.storage.onChanged.addListener(async (changes, areaName) => {
-    if (areaName !== "local" || (!changes.showNames && !changes.showFolderNames)) {
+    if (areaName !== "local" || (!changes.showNames && !changes.showFolderNames && !changes.folderColor && !changes.folderIconMode)) {
       return;
     }
     await loadState();
+    setThemeVars(state.theme);
     render();
   });
   browser.theme.onUpdated.addListener(async () => {
     await loadState();
+    setThemeVars(state.theme);
     render();
   });
 

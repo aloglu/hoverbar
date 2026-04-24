@@ -16,14 +16,18 @@
   --hoverbar-fg: CanvasText;
   --hoverbar-border: color-mix(in srgb, CanvasText 14%, transparent);
   --hoverbar-shadow: rgba(15, 23, 42, 0.18);
+  --hoverbar-folder-color: color-mix(in srgb, var(--hoverbar-fg) 18%, transparent);
+  --hoverbar-zoom-scale: 1;
   position: fixed;
   inset: 0 0 auto 0;
-  width: 100%;
+  width: calc(100% / var(--hoverbar-zoom-scale));
   z-index: 2147483647;
   pointer-events: none;
   overflow: visible;
   font: 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--hoverbar-fg);
+  transform: scale(var(--hoverbar-zoom-scale));
+  transform-origin: top left;
 }
 
 .hoverbar-hitbox {
@@ -82,7 +86,7 @@
   background: var(--hoverbar-bg);
   color: var(--hoverbar-fg);
   border: 1px solid var(--hoverbar-border);
-  border-radius: 0 0 18px 18px;
+  border-radius: 0;
   box-shadow: 0 14px 34px -16px var(--hoverbar-shadow);
   backdrop-filter: blur(18px) saturate(1.1);
   -webkit-backdrop-filter: blur(18px) saturate(1.1);
@@ -98,7 +102,7 @@
   border-left: 0;
   border-right: 0;
   border-top: 0;
-  border-radius: 0 0 14px 14px;
+  border-radius: 0;
 }
 
 .hoverbar-item {
@@ -116,96 +120,123 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 34px;
-  min-width: 34px;
+  height: 36px;
+  min-width: 36px;
   padding: 0 8px;
   border-radius: 11px;
-  transition:
-    background-color 140ms ease,
-    transform 140ms ease;
+  transition: background-color 140ms ease;
 }
 
 .hoverbar-button:hover,
 .hoverbar-button:focus-visible {
   background: color-mix(in srgb, var(--hoverbar-fg) 10%, transparent);
   outline: none;
-  transform: translateY(-1px);
+}
+
+.hoverbar-button.is-dragging {
+  opacity: 0.45;
+}
+
+.hoverbar-button.drop-before,
+.hoverbar-button.drop-after,
+.hoverbar-button.drop-inside {
+  background: color-mix(in srgb, var(--hoverbar-fg) 14%, transparent);
+}
+
+.hoverbar-button.drop-before {
+  box-shadow: inset 3px 0 0 var(--hoverbar-fg);
+}
+
+.hoverbar-button.drop-after {
+  box-shadow: inset -3px 0 0 var(--hoverbar-fg);
+}
+
+.hoverbar-menu-button.drop-before {
+  box-shadow: inset 0 3px 0 var(--hoverbar-fg);
+}
+
+.hoverbar-menu-button.drop-after {
+  box-shadow: inset 0 -3px 0 var(--hoverbar-fg);
+}
+
+.hoverbar-button.drop-inside {
+  outline: 2px solid color-mix(in srgb, var(--hoverbar-fg) 42%, transparent);
+  outline-offset: -2px;
 }
 
 .hoverbar-icon-wrap {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 18px;
+  flex: 0 0 20px;
+  overflow: hidden;
 }
 
 .hoverbar-icon,
 .hoverbar-fallback-icon {
-  width: 18px;
-  height: 18px;
+  position: absolute;
+  inset: 0;
+  width: 20px;
+  height: 20px;
   border-radius: 5px;
 }
 
 .hoverbar-icon {
   display: block;
+  flex: 0 0 auto;
   object-fit: cover;
 }
 
 .hoverbar-fallback-icon {
-  position: relative;
-  display: inline-block;
-  border-radius: 999px;
-}
-
-.hoverbar-fallback-ring,
-.hoverbar-fallback-h,
-.hoverbar-fallback-v {
-  position: absolute;
-}
-
-.hoverbar-fallback-ring {
-  inset: 2px;
-  border-radius: 999px;
-  border: 1.5px solid color-mix(in srgb, var(--hoverbar-fg) 84%, transparent);
-}
-
-.hoverbar-fallback-h {
-  left: 4px;
-  right: 4px;
-  top: 8px;
-  height: 1.5px;
-  background: color-mix(in srgb, var(--hoverbar-fg) 84%, transparent);
-  box-shadow: 0 -4px 0 0 color-mix(in srgb, var(--hoverbar-fg) 84%, transparent);
-}
-
-.hoverbar-fallback-v {
-  top: 4px;
-  bottom: 4px;
-  left: 8px;
-  width: 1.5px;
-  background: color-mix(in srgb, var(--hoverbar-fg) 84%, transparent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--hoverbar-fg) 14%, transparent);
+  color: color-mix(in srgb, var(--hoverbar-fg) 86%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .hoverbar-folder-glyph {
   position: relative;
-  width: 16px;
-  height: 12px;
+  width: 18px;
+  height: 14px;
   border-radius: 4px;
-  background: color-mix(in srgb, var(--hoverbar-fg) 18%, transparent);
+  background: var(--hoverbar-folder-color);
 }
 
-.hoverbar-folder-glyph::before {
-  content: "";
+.hoverbar-folder-tab {
   position: absolute;
   left: 1px;
   top: -3px;
   width: 8px;
   height: 5px;
   border-radius: 4px 4px 0 0;
-  background: color-mix(in srgb, var(--hoverbar-fg) 22%, transparent);
+  background: color-mix(in srgb, var(--hoverbar-folder-color) 86%, var(--hoverbar-fg));
+}
+
+.hoverbar-folder-emoji {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.hoverbar-folder-emoji-badge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: var(--hoverbar-bg);
+  font-size: 10px;
 }
 
 .hoverbar-label {
@@ -228,7 +259,7 @@
   position: fixed;
   min-width: 220px;
   padding: 8px;
-  border-radius: 16px;
+  border-radius: 12px;
   flex-direction: column;
   align-items: stretch;
   pointer-events: auto;
@@ -258,6 +289,53 @@
   inset: 0;
   pointer-events: none;
   z-index: 2147483647;
+}
+
+.hoverbar-context-menu {
+  position: fixed;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--hoverbar-border);
+  border-radius: 12px;
+  background: var(--hoverbar-bg);
+  color: var(--hoverbar-fg);
+  box-shadow: 0 18px 42px -18px var(--hoverbar-shadow);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  pointer-events: auto;
+  z-index: 2147483647;
+}
+
+.hoverbar-context-action {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hoverbar-context-action:hover,
+.hoverbar-context-action:focus-visible {
+  background: color-mix(in srgb, var(--hoverbar-fg) 10%, transparent);
+  outline: none;
+}
+
+.hoverbar-context-action:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.hoverbar-context-separator {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--hoverbar-border);
 }
 
 @media (max-width: 720px) {

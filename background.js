@@ -1,9 +1,14 @@
 const DEFAULT_SETTINGS = {
   showNames: false,
-  showFolderNames: true
+  showFolderNames: true,
+  folderColor: "",
+  folderIconMode: "emoji",
+  faviconCache: {}
 };
 
 const TOOLBAR_ROOT_ID = "toolbar_____";
+const faviconWarmups = new Set();
+let faviconBroadcastTimer = null;
 
 browser.runtime.onInstalled.addListener(async () => {
   const current = await browser.storage.local.get(DEFAULT_SETTINGS);
@@ -17,7 +22,23 @@ browser.runtime.onMessage.addListener((message, sender) => {
 
   if (message.type === "hoverbar:get-state") {
     const windowId = sender.tab?.windowId ?? browser.windows.WINDOW_ID_CURRENT;
-    return buildState(windowId);
+    return buildState(windowId, sender.tab?.id);
+  }
+
+  if (message.type === "hoverbar:move-bookmark") {
+    return moveBookmark(message.payload);
+  }
+
+  if (message.type === "hoverbar:remove-bookmark") {
+    return removeBookmark(message.payload);
+  }
+
+  if (message.type === "hoverbar:open-bookmark") {
+    return openBookmark(message.payload, sender.tab?.windowId);
+  }
+
+  if (message.type === "hoverbar:cache-favicon") {
+    return cacheFavicon(message.payload);
   }
 
   return undefined;
@@ -26,7 +47,7 @@ browser.runtime.onMessage.addListener((message, sender) => {
 browser.storage.onChanged.addListener((changes, areaName) => {
   if (
     areaName !== "local" ||
-    (!changes.showNames && !changes.showFolderNames && Object.keys(changes).length === 0)
+    (!changes.showNames && !changes.showFolderNames && !changes.folderColor && !changes.folderIconMode)
   ) {
     return;
   }
@@ -54,6 +75,25 @@ browser.theme.onUpdated.addListener((updateInfo) => {
   broadcastState(updateInfo.windowId);
 });
 
+if (browser.tabs.onZoomChange) {
+  browser.tabs.onZoomChange.addListener((zoomChangeInfo) => {
+    if (zoomChangeInfo.tabId) {
+      broadcastTabState(zoomChangeInfo.tabId);
+    }
+  });
+}
+
+browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  const favIconUrl = changeInfo.favIconUrl || tab.favIconUrl;
+  if (!favIconUrl) {
+    return;
+  }
+
+  cacheTabFavicon(tab.url, favIconUrl).catch((error) => {
+    console.warn("Hoverbar tab favicon cache failed", error);
+  });
+});
+
 async function broadcastState(windowId) {
   const tabs = await browser.tabs.query(windowId ? { windowId } : {});
   await Promise.all(
@@ -63,7 +103,7 @@ async function broadcastState(windowId) {
       }
 
       try {
-        const state = await buildState(tab.windowId);
+        const state = await buildState(tab.windowId, tab.id);
         await browser.tabs.sendMessage(tab.id, {
           type: "hoverbar:update",
           payload: state
@@ -77,20 +117,43 @@ async function broadcastState(windowId) {
   );
 }
 
-async function buildState(windowId) {
-  const [settings, items, theme] = await Promise.all([
+async function broadcastTabState(tabId) {
+  try {
+    const tab = await browser.tabs.get(tabId);
+    const state = await buildState(tab.windowId, tab.id);
+    await browser.tabs.sendMessage(tab.id, {
+      type: "hoverbar:update",
+      payload: state
+    });
+  } catch (error) {
+    if (!`${error}`.includes("Receiving end does not exist")) {
+      console.warn("Hoverbar tab update failed", error);
+    }
+  }
+}
+
+async function buildState(windowId, tabId) {
+  const [settings, items, theme, zoom] = await Promise.all([
     browser.storage.local.get(DEFAULT_SETTINGS),
     loadToolbarItems(),
-    loadTheme(windowId)
+    loadTheme(windowId),
+    loadZoom(tabId)
   ]);
+
+  const faviconCache = sanitizeFaviconCache(settings.faviconCache);
+  warmFaviconCache(items, faviconCache);
 
   return {
     settings: {
       showNames: Boolean(settings.showNames),
-      showFolderNames: Boolean(settings.showFolderNames)
+      showFolderNames: Boolean(settings.showFolderNames),
+      folderColor: typeof settings.folderColor === "string" ? settings.folderColor : "",
+      folderIconMode: normalizeFolderIconMode(settings.folderIconMode)
     },
     items,
-    theme
+    theme,
+    zoom,
+    faviconCache
   };
 }
 
@@ -126,6 +189,8 @@ function sanitizeNodes(nodes) {
     .filter((node) => node.type !== "separator")
     .map((node) => ({
       id: node.id,
+      parentId: node.parentId || null,
+      index: Number.isInteger(node.index) ? node.index : null,
       title: node.title || friendlyTitle(node.url),
       url: node.url || null,
       type: node.url ? "bookmark" : "folder",
@@ -161,6 +226,252 @@ async function loadTheme(windowId) {
     shadow,
     mode
   };
+}
+
+async function loadZoom(tabId) {
+  if (!tabId || !browser.tabs.getZoom) {
+    return 1;
+  }
+
+  try {
+    return await browser.tabs.getZoom(tabId);
+  } catch {
+    return 1;
+  }
+}
+
+async function moveBookmark(payload) {
+  const id = payload?.id;
+  const parentId = payload?.parentId;
+  const index = payload?.index;
+
+  if (typeof id !== "string" || typeof parentId !== "string" || id === parentId) {
+    return { ok: false };
+  }
+
+  const destination = { parentId };
+  if (Number.isInteger(index) && index >= 0) {
+    destination.index = index;
+  }
+
+  await browser.bookmarks.move(id, destination);
+  return { ok: true };
+}
+
+async function removeBookmark(payload) {
+  const id = payload?.id;
+  const type = payload?.type;
+
+  if (typeof id !== "string") {
+    return { ok: false };
+  }
+
+  if (type === "folder") {
+    await browser.bookmarks.removeTree(id);
+  } else {
+    await browser.bookmarks.remove(id);
+  }
+
+  return { ok: true };
+}
+
+async function openBookmark(payload, fallbackWindowId) {
+  const url = payload?.url;
+  const where = payload?.where;
+
+  if (typeof url !== "string" || !url) {
+    return { ok: false };
+  }
+
+  if (where === "window") {
+    await browser.windows.create({ url });
+  } else {
+    await browser.tabs.create({
+      url,
+      windowId: payload?.windowId || fallbackWindowId
+    });
+  }
+
+  return { ok: true };
+}
+
+async function cacheFavicon(payload) {
+  const host = payload?.host;
+  const href = payload?.href;
+
+  if (typeof host !== "string" || typeof href !== "string" || !host || !href) {
+    return { ok: false };
+  }
+
+  const { faviconCache = {} } = await browser.storage.local.get({ faviconCache: {} });
+  const sanitizedCache = sanitizeFaviconCache(faviconCache);
+  if (sanitizedCache[host] === href) {
+    return { ok: true };
+  }
+
+  await browser.storage.local.set({
+    faviconCache: {
+      ...sanitizedCache,
+      [host]: href
+    }
+  });
+  return { ok: true };
+}
+
+async function cacheTabFavicon(tabUrl, favIconUrl) {
+  let parsedTabUrl;
+  try {
+    parsedTabUrl = new URL(tabUrl);
+  } catch {
+    return;
+  }
+
+  if (!/^https?:$/.test(parsedTabUrl.protocol) || typeof favIconUrl !== "string") {
+    return;
+  }
+
+  let href = favIconUrl;
+  if (/^https?:\/\//.test(favIconUrl)) {
+    href = await fetchFaviconDataUrl(favIconUrl);
+  } else if (!/^data:image\//.test(favIconUrl)) {
+    return;
+  }
+
+  await cacheFavicon({
+    host: parsedTabUrl.hostname,
+    href
+  });
+  scheduleFaviconBroadcast();
+}
+
+function warmFaviconCache(items, cache) {
+  const bookmarkUrls = collectBookmarkUrls(items);
+  let started = 0;
+  for (const url of bookmarkUrls) {
+    if (started >= 8) {
+      return;
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      continue;
+    }
+
+    if (!/^https?:$/.test(parsed.protocol) || cache[parsed.hostname]?.startsWith("data:image/") || faviconWarmups.has(parsed.hostname)) {
+      continue;
+    }
+
+    faviconWarmups.add(parsed.hostname);
+    started += 1;
+    fetchAndCacheFavicon(parsed).finally(() => {
+      faviconWarmups.delete(parsed.hostname);
+    });
+  }
+}
+
+function collectBookmarkUrls(items, urls = []) {
+  for (const item of items ?? []) {
+    if (item.url) {
+      urls.push(item.url);
+    }
+    collectBookmarkUrls(item.children, urls);
+  }
+  return urls;
+}
+
+async function fetchAndCacheFavicon(parsedUrl) {
+  const candidates = [
+    `${parsedUrl.origin}/favicon.ico`,
+    `${parsedUrl.origin}/apple-touch-icon.png`,
+    `${parsedUrl.origin}/apple-touch-icon-precomposed.png`
+  ];
+
+  for (const href of candidates) {
+    try {
+      const dataUrl = await fetchFaviconDataUrl(href);
+      await cacheFavicon({
+        host: parsedUrl.hostname,
+        href: dataUrl
+      });
+      scheduleFaviconBroadcast();
+      return;
+    } catch {
+      // Try the next common site-owned favicon URL.
+    }
+  }
+}
+
+async function fetchFaviconDataUrl(href) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, 3500);
+
+  try {
+    const response = await fetch(href, {
+      cache: "force-cache",
+      credentials: "omit",
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      throw new Error(`Favicon request failed: ${response.status}`);
+    }
+
+    const contentType = response.headers.get("content-type") || "image/x-icon";
+    if (!contentType.startsWith("image/")) {
+      throw new Error(`Unexpected favicon content type: ${contentType}`);
+    }
+
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > 65536) {
+      throw new Error("Favicon is too large to cache");
+    }
+
+    return `data:${contentType.split(";")[0]};base64,${arrayBufferToBase64(buffer)}`;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+
+  return btoa(binary);
+}
+
+function scheduleFaviconBroadcast() {
+  clearTimeout(faviconBroadcastTimer);
+  faviconBroadcastTimer = setTimeout(() => {
+    broadcastState();
+  }, 800);
+}
+
+function sanitizeFaviconCache(cache) {
+  if (!cache || typeof cache !== "object" || Array.isArray(cache)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(cache).filter(([host, href]) => (
+      typeof host === "string" &&
+      typeof href === "string" &&
+      (/^https?:\/\//.test(href) || /^data:image\//.test(href)) &&
+      !href.includes("icons.duckduckgo.com")
+    ))
+  );
+}
+
+function normalizeFolderIconMode(value) {
+  return ["emoji", "folder", "both"].includes(value) ? value : "emoji";
 }
 
 function firstColor(...values) {

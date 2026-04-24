@@ -1,4 +1,10 @@
-if (window.top === window && document.documentElement instanceof HTMLElement) {
+const HOVERBAR_PAGE_TYPES = new Set(["text/html", "application/xhtml+xml"]);
+
+if (
+  window.top === window &&
+  document.documentElement instanceof HTMLElement &&
+  HOVERBAR_PAGE_TYPES.has(document.contentType)
+) {
   initHoverbar().catch((error) => {
     console.warn("Hoverbar failed to initialize", error);
   });
@@ -23,6 +29,7 @@ async function initHoverbar() {
       </div>
     </div>
     <div class="hoverbar-popups"></div>
+    <div class="hoverbar-context-menu" hidden></div>
   `;
 
   root.append(stylesheet, shell);
@@ -42,15 +49,21 @@ async function initHoverbar() {
   const itemsContainer = root.querySelector(".hoverbar-items");
   const scrollContainer = root.querySelector(".hoverbar-scroll");
   const popupLayer = root.querySelector(".hoverbar-popups");
+  const contextMenu = root.querySelector(".hoverbar-context-menu");
   const alwaysVisible = window.location.href === "about:blank";
   let state = null;
   let openMenuPath = [];
   let anchorMap = new Map();
+  let itemMap = new Map();
   let closeTimer = null;
   let hoverTimer = null;
   let hoverVisible = alwaysVisible;
   let hoverSuppressed = false;
   let chromeHoverHold = false;
+  let draggedItem = null;
+  let dragOpenTimer = null;
+  let dragOpenTargetId = null;
+  let layoutScale = 1;
   const menuScrollTops = new Map();
   const POINTER_GRACE_PX = 10;
   const TOP_REOPEN_PX = 10;
@@ -63,11 +76,29 @@ async function initHoverbar() {
     host.style.setProperty("color-scheme", theme.mode || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   }
 
+  function setSettingsVars(settings) {
+    setShellVar("--hoverbar-folder-color", settings.folderColor);
+  }
+
+  function setZoomVars(zoom) {
+    const normalizedZoom = typeof zoom === "number" && zoom > 0 ? zoom : 1;
+    layoutScale = 1 / normalizedZoom;
+    shell.style.setProperty("--hoverbar-zoom-scale", String(layoutScale));
+  }
+
   function setVar(name, value) {
     if (value) {
       host.style.setProperty(name, value);
     } else {
       host.style.removeProperty(name);
+    }
+  }
+
+  function setShellVar(name, value) {
+    if (value) {
+      shell.style.setProperty(name, value);
+    } else {
+      shell.style.removeProperty(name);
     }
   }
 
@@ -84,7 +115,7 @@ async function initHoverbar() {
     }
 
     openMenuPath = [];
-    render();
+    syncOpenMenuState();
   }
 
   function toggleMenu(pathKey) {
@@ -98,7 +129,7 @@ async function initHoverbar() {
   }
 
   function scheduleClose() {
-    if (alwaysVisible) {
+    if (alwaysVisible || draggedItem) {
       return;
     }
 
@@ -128,7 +159,28 @@ async function initHoverbar() {
     }
 
     openMenuPath = normalized;
-    render();
+    syncOpenMenuState();
+  }
+
+  function setOpenMenuPathForDrag(nextPath) {
+    const normalized = nextPath ?? [];
+    if (
+      normalized.length === openMenuPath.length &&
+      normalized.every((value, index) => value === openMenuPath[index])
+    ) {
+      return;
+    }
+
+    openMenuPath = normalized;
+    syncOpenMenuState();
+  }
+
+  function syncOpenMenuState() {
+    shell.classList.toggle("menus-open", openMenuPath.length > 0);
+    for (const button of root.querySelectorAll("[data-path-key]")) {
+      button.setAttribute("aria-expanded", String(openMenuPath.includes(button.dataset.pathKey)));
+    }
+    renderPopups();
   }
 
   function setHoverVisible(nextVisible) {
@@ -154,7 +206,7 @@ async function initHoverbar() {
   }
 
   function scheduleHoverHide() {
-    if (alwaysVisible) {
+    if (alwaysVisible || draggedItem) {
       return;
     }
 
@@ -187,6 +239,7 @@ async function initHoverbar() {
     }
 
     anchorMap = new Map();
+    itemMap = buildItemMap(state.items);
     shell.classList.toggle("show-names", Boolean(state.settings.showNames));
     shell.classList.toggle("show-folder-names", Boolean(state.settings.showFolderNames));
     shell.classList.toggle("menus-open", openMenuPath.length > 0);
@@ -210,6 +263,7 @@ async function initHoverbar() {
     button.type = "button";
     button.className = "hoverbar-button hoverbar-folder";
     button.dataset.pathKey = pathKey;
+    setItemDataset(button, item);
     button.setAttribute("aria-haspopup", "menu");
     button.setAttribute("aria-expanded", String(openMenuPath.includes(pathKey)));
     button.title = item.title;
@@ -221,6 +275,7 @@ async function initHoverbar() {
       event.stopPropagation();
       toggleMenu(pathKey);
     });
+    bindItemInteractions(button, item);
 
     wrapper.append(button);
 
@@ -245,6 +300,7 @@ async function initHoverbar() {
         button.type = "button";
         button.className = "hoverbar-button hoverbar-folder hoverbar-menu-button";
         button.dataset.pathKey = pathKey;
+        setItemDataset(button, child);
         button.setAttribute("role", "menuitem");
         button.setAttribute("aria-haspopup", "menu");
         button.setAttribute("aria-expanded", String(openMenuPath.includes(pathKey)));
@@ -257,6 +313,7 @@ async function initHoverbar() {
           event.stopPropagation();
           toggleMenu(pathKey);
         });
+        bindItemInteractions(button, child);
         row.append(button);
       }
 
@@ -271,11 +328,9 @@ async function initHoverbar() {
       return;
     }
 
-    const existingMenus = new Map();
     for (const menu of popupLayer.querySelectorAll(".hoverbar-menu")) {
       if (menu.dataset.pathKey) {
         menuScrollTops.set(menu.dataset.pathKey, menu.scrollTop);
-        existingMenus.set(menu.dataset.pathKey, menu);
       }
     }
 
@@ -289,11 +344,9 @@ async function initHoverbar() {
         continue;
       }
 
-      const menu = existingMenus.get(pathKey) || createMenu(node.children, pathKey);
-      if (existingMenus.has(pathKey)) {
-        remapMenuAnchors(menu);
-      }
+      const menu = createMenu(node.children, pathKey);
       positionMenu(menu, anchor, pathKey);
+      bindMenuInteractions(menu);
     }
   }
 
@@ -344,13 +397,23 @@ async function initHoverbar() {
       top = Math.max(viewportPadding, viewportHeight - maxHeight - viewportPadding);
     }
 
-    menu.style.left = `${left}px`;
-    menu.style.top = `${top}px`;
-    menu.style.maxHeight = `${maxHeight}px`;
+    menu.style.left = `${left / layoutScale}px`;
+    menu.style.top = `${top / layoutScale}px`;
+    menu.style.maxHeight = `${maxHeight / layoutScale}px`;
     menu.style.visibility = "visible";
     menu.scrollTop = menuScrollTops.get(pathKey) || 0;
+  }
+
+  function bindMenuInteractions(menu) {
+    if (menu.dataset.bound === "true") {
+      return;
+    }
+
+    menu.dataset.bound = "true";
     menu.addEventListener("scroll", () => {
-      menuScrollTops.set(pathKey, menu.scrollTop);
+      if (menu.dataset.pathKey) {
+        menuScrollTops.set(menu.dataset.pathKey, menu.scrollTop);
+      }
     });
     menu.addEventListener("mouseenter", cancelClose);
     menu.addEventListener(
@@ -391,6 +454,7 @@ async function initHoverbar() {
     }
     anchor.href = item.url;
     anchor.title = item.title;
+    setItemDataset(anchor, item);
     anchor.append(buildIcon(item), buildLabel(item.title, inMenu));
     const closeAfterActivation = () => {
       closeMenus();
@@ -402,7 +466,362 @@ async function initHoverbar() {
         closeAfterActivation();
       }
     });
+    bindItemInteractions(anchor, item);
     return anchor;
+  }
+
+  function setItemDataset(element, item) {
+    element.dataset.bookmarkId = item.id;
+    element.dataset.bookmarkType = item.type;
+    if (item.parentId) {
+      element.dataset.parentId = item.parentId;
+    }
+    if (Number.isInteger(item.index)) {
+      element.dataset.index = String(item.index);
+    }
+    if (item.url) {
+      element.dataset.url = item.url;
+    }
+  }
+
+  function bindItemInteractions(element, item) {
+    element.draggable = true;
+    element.addEventListener("dragstart", (event) => {
+      hideContextMenu();
+      draggedItem = item;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/x-hoverbar-bookmark-id", item.id);
+      event.dataTransfer.setData("text/plain", item.url || item.title);
+      element.classList.add("is-dragging");
+    });
+    element.addEventListener("dragend", () => {
+      draggedItem = null;
+      cancelDragOpen();
+      clearDropTargets();
+      element.classList.remove("is-dragging");
+    });
+    element.addEventListener("dragover", (event) => {
+      if (!canDropOn(item)) {
+        return;
+      }
+
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      markDropTarget(element, getDropOperation(item, event));
+      scheduleDragOpen(item);
+    });
+    element.addEventListener("dragenter", (event) => {
+      if (!canDropOn(item)) {
+        return;
+      }
+
+      event.preventDefault();
+      scheduleDragOpen(item);
+    });
+    element.addEventListener("dragleave", () => {
+      element.classList.remove("drop-before", "drop-after", "drop-inside");
+    });
+    element.addEventListener("drop", (event) => {
+      if (!canDropOn(item)) {
+        return;
+      }
+
+      event.preventDefault();
+      hideContextMenu();
+      cancelDragOpen();
+      moveDraggedItem(item, getDropOperation(item, event)).catch((error) => {
+        console.warn("Hoverbar bookmark move failed", error);
+      });
+    });
+    element.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showContextMenu(item, event.clientX, event.clientY);
+    });
+  }
+
+  function scheduleDragOpen(item) {
+    if (item.type !== "folder") {
+      cancelDragOpen();
+      return;
+    }
+
+    if (dragOpenTargetId === item.id && dragOpenTimer) {
+      return;
+    }
+
+    window.clearTimeout(dragOpenTimer);
+    dragOpenTargetId = item.id;
+    dragOpenTimer = window.setTimeout(() => {
+      if (dragOpenTargetId !== item.id) {
+        return;
+      }
+
+      const pathKey = findPathById(item.id);
+      if (pathKey) {
+        setOpenMenuPathForDrag(buildPathChain(pathKey));
+      }
+      dragOpenTimer = null;
+    }, 220);
+  }
+
+  function cancelDragOpen(item = null) {
+    if (item && dragOpenTargetId !== item.id) {
+      return;
+    }
+
+    window.clearTimeout(dragOpenTimer);
+    dragOpenTimer = null;
+    dragOpenTargetId = null;
+  }
+
+  function syncDragOpenToPoint(clientX, clientY) {
+    if (!draggedItem) {
+      return;
+    }
+
+    const folderButton = folderButtonFromPoint(clientX, clientY);
+    if (!folderButton) {
+      cancelDragOpen();
+      return;
+    }
+
+    const folder = itemMap.get(folderButton.dataset.bookmarkId);
+    if (canDropOn(folder)) {
+      scheduleDragOpen(folder);
+    }
+  }
+
+  function folderButtonFromPoint(clientX, clientY) {
+    for (const button of root.querySelectorAll(".hoverbar-folder[data-path-key]")) {
+      if (button.dataset.bookmarkId === draggedItem?.id) {
+        continue;
+      }
+
+      if (pointInRect(clientX, clientY, expandRect(button.getBoundingClientRect(), 4))) {
+        return button;
+      }
+    }
+
+    return null;
+  }
+
+  function buildItemMap(items, map = new Map()) {
+    for (const item of items ?? []) {
+      map.set(item.id, item);
+      buildItemMap(item.children, map);
+    }
+    return map;
+  }
+
+  function findPathById(id, items = state?.items ?? [], prefix = "") {
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      const pathKey = prefix ? `${prefix}.${index}` : `${index}`;
+      if (item.id === id) {
+        return pathKey;
+      }
+      const childPath = findPathById(id, item.children ?? [], pathKey);
+      if (childPath) {
+        return childPath;
+      }
+    }
+    return null;
+  }
+
+  function canDropOn(target) {
+    if (!draggedItem || !target || draggedItem.id === target.id) {
+      return false;
+    }
+
+    if (draggedItem.type === "folder" && isDescendant(target, draggedItem.id)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function isDescendant(item, ancestorId) {
+    let current = item;
+    while (current?.parentId) {
+      if (current.parentId === ancestorId) {
+        return true;
+      }
+      current = itemMap.get(current.parentId);
+    }
+    return false;
+  }
+
+  function getDropOperation(target, event) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const horizontal = !event.currentTarget.closest(".hoverbar-menu");
+    const coordinate = horizontal ? event.clientX - rect.left : event.clientY - rect.top;
+    const size = horizontal ? rect.width : rect.height;
+    const beforeEdge = size * 0.28;
+    const afterEdge = size * 0.72;
+
+    if (coordinate < beforeEdge) {
+      return "before";
+    }
+
+    if (coordinate > afterEdge) {
+      return "after";
+    }
+
+    return target.type === "folder" ? "inside" : "after";
+  }
+
+  function markDropTarget(element, operation) {
+    clearDropTargets();
+    element.classList.add(`drop-${operation}`);
+  }
+
+  function clearDropTargets() {
+    for (const element of root.querySelectorAll(".drop-before, .drop-after, .drop-inside")) {
+      element.classList.remove("drop-before", "drop-after", "drop-inside");
+    }
+  }
+
+  async function moveDraggedItem(target, operation) {
+    if (!canDropOn(target)) {
+      return;
+    }
+
+    clearDropTargets();
+
+    if (operation === "inside" && target.type === "folder") {
+      await browser.runtime.sendMessage({
+        type: "hoverbar:move-bookmark",
+        payload: {
+          id: draggedItem.id,
+          parentId: target.id
+        }
+      });
+      return;
+    }
+
+    if (!target.parentId || !Number.isInteger(target.index)) {
+      return;
+    }
+
+    await browser.runtime.sendMessage({
+      type: "hoverbar:move-bookmark",
+      payload: {
+        id: draggedItem.id,
+        parentId: target.parentId,
+        index: destinationIndex(target, operation)
+      }
+    });
+  }
+
+  function destinationIndex(target, operation) {
+    let index = target.index + (operation === "after" ? 1 : 0);
+    if (draggedItem.parentId === target.parentId && Number.isInteger(draggedItem.index) && draggedItem.index < target.index) {
+      index -= 1;
+    }
+    return Math.max(0, index);
+  }
+
+  function showContextMenu(item, clientX, clientY) {
+    if (!contextMenu) {
+      return;
+    }
+
+    contextMenu.replaceChildren();
+    contextMenu.append(
+      createContextAction("Open in New Tab", () => openItem(item, "tab"), !item.url),
+      createContextAction("Open in New Window", () => openItem(item, "window"), !item.url),
+      createContextSeparator(),
+      createContextAction(`Delete ${item.type === "folder" ? "Folder" : "Bookmark"}`, () => removeItem(item))
+    );
+    contextMenu.hidden = false;
+    contextMenu.style.left = "0px";
+    contextMenu.style.top = "0px";
+
+    const rect = contextMenu.getBoundingClientRect();
+    const padding = 8;
+    const left = Math.min(clientX, document.documentElement.clientWidth - rect.width - padding);
+    const top = Math.min(clientY, document.documentElement.clientHeight - rect.height - padding);
+    contextMenu.style.left = `${Math.max(padding, left) / layoutScale}px`;
+    contextMenu.style.top = `${Math.max(padding, top) / layoutScale}px`;
+  }
+
+  function createContextAction(label, action, disabled = false) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "hoverbar-context-action";
+    button.textContent = label;
+    button.disabled = disabled;
+    button.addEventListener("click", () => {
+      hideContextMenu();
+      action();
+    });
+    return button;
+  }
+
+  function createContextSeparator() {
+    const separator = document.createElement("div");
+    separator.className = "hoverbar-context-separator";
+    separator.setAttribute("role", "separator");
+    return separator;
+  }
+
+  function hideContextMenu() {
+    if (contextMenu) {
+      contextMenu.hidden = true;
+    }
+  }
+
+  function resetTransientState() {
+    if (alwaysVisible) {
+      return;
+    }
+
+    window.clearTimeout(closeTimer);
+    window.clearTimeout(hoverTimer);
+    cancelDragOpen();
+    closeTimer = null;
+    hoverTimer = null;
+    draggedItem = null;
+    openMenuPath = [];
+    hoverVisible = false;
+    hoverSuppressed = false;
+    chromeHoverHold = false;
+    hideContextMenu();
+    clearDropTargets();
+    shell.classList.remove("menus-open", "grace-open", "suppress-open");
+    renderPopups();
+  }
+
+  async function openItem(item, where) {
+    if (!item.url) {
+      return;
+    }
+
+    await browser.runtime.sendMessage({
+      type: "hoverbar:open-bookmark",
+      payload: {
+        url: item.url,
+        where
+      }
+    });
+    suppressHoverUntilTopReentry();
+  }
+
+  async function removeItem(item) {
+    const confirmed = window.confirm(`Delete ${item.type === "folder" ? "folder" : "bookmark"} "${item.title}"?`);
+    if (!confirmed) {
+      return;
+    }
+
+    await browser.runtime.sendMessage({
+      type: "hoverbar:remove-bookmark",
+      payload: {
+        id: item.id,
+        type: item.type
+      }
+    });
+    closeMenus();
   }
 
   function buildIcon(item) {
@@ -410,45 +829,82 @@ async function initHoverbar() {
     iconWrap.className = "hoverbar-icon-wrap";
 
     if (item.type === "folder") {
-      const folder = document.createElement("span");
-      folder.className = "hoverbar-folder-glyph";
-      folder.setAttribute("aria-hidden", "true");
-      iconWrap.append(folder);
+      iconWrap.classList.add("hoverbar-folder-icon-wrap");
+      iconWrap.append(...buildFolderIconParts(item));
       return iconWrap;
     }
 
     const img = document.createElement("img");
     img.className = "hoverbar-icon";
     img.alt = "";
-    const candidates = faviconCandidates(item.url);
+    const candidates = faviconCandidates(item.url, state?.faviconCache);
     if (candidates.length > 0) {
       img.src = candidates[0];
       img.dataset.index = "0";
       img.dataset.candidates = JSON.stringify(candidates);
       img.addEventListener("error", rotateFaviconSource);
+    } else {
+      img.hidden = true;
     }
 
     const fallback = document.createElement("span");
     fallback.className = "hoverbar-fallback-icon";
     fallback.setAttribute("aria-hidden", "true");
     fallback.hidden = Boolean(img.src);
-    fallback.innerHTML = `
-      <span class="hoverbar-fallback-ring"></span>
-      <span class="hoverbar-fallback-h"></span>
-      <span class="hoverbar-fallback-v"></span>
-    `;
+    fallback.textContent = fallbackInitial(item);
 
     if (img.src) {
       img.addEventListener("load", () => {
+        img.hidden = false;
         fallback.hidden = true;
-      });
-      img.addEventListener("error", () => {
-        fallback.hidden = false;
+        cacheFavicon(item.url, img.currentSrc || img.src);
       });
     }
 
     iconWrap.append(img, fallback);
     return iconWrap;
+  }
+
+  function buildFolderIconParts(item) {
+    const emoji = singleEmoji(item.title);
+    const mode = state?.settings?.folderIconMode || "emoji";
+
+    if (emoji && mode === "emoji") {
+      return [createFolderEmoji(emoji)];
+    }
+
+    const folder = createFolderGlyph();
+    if (emoji && mode === "both") {
+      return [folder, createFolderEmoji(emoji, true)];
+    }
+
+    return [folder];
+  }
+
+  function createFolderGlyph() {
+    const folder = document.createElement("span");
+    folder.className = "hoverbar-folder-glyph";
+    folder.setAttribute("aria-hidden", "true");
+    if (state?.settings?.folderColor) {
+      folder.style.setProperty("--hoverbar-folder-color", state.settings.folderColor);
+      folder.style.backgroundColor = state.settings.folderColor;
+    }
+
+    const tab = document.createElement("span");
+    tab.className = "hoverbar-folder-tab";
+    if (state?.settings?.folderColor) {
+      tab.style.backgroundColor = state.settings.folderColor;
+    }
+    folder.append(tab);
+    return folder;
+  }
+
+  function createFolderEmoji(emoji, badge = false) {
+    const element = document.createElement("span");
+    element.className = badge ? "hoverbar-folder-emoji hoverbar-folder-emoji-badge" : "hoverbar-folder-emoji";
+    element.setAttribute("aria-hidden", "true");
+    element.textContent = emoji;
+    return element;
   }
 
   function buildLabel(title, inMenu = false) {
@@ -460,35 +916,83 @@ async function initHoverbar() {
 
   function rotateFaviconSource(event) {
     const img = event.currentTarget;
+    const fallback = img.nextElementSibling;
     const candidates = JSON.parse(img.dataset.candidates || "[]");
     const currentIndex = Number(img.dataset.index || 0);
     const nextIndex = currentIndex + 1;
 
     if (nextIndex >= candidates.length) {
-      img.remove();
+      img.hidden = true;
+      if (fallback) {
+        fallback.hidden = false;
+      }
       return;
     }
 
+    if (fallback) {
+      fallback.hidden = true;
+    }
     img.dataset.index = String(nextIndex);
     img.src = candidates[nextIndex];
   }
 
-  function faviconCandidates(url) {
+  function cacheFavicon(url, href) {
+    try {
+      const host = new URL(url).hostname;
+      browser.runtime.sendMessage({
+        type: "hoverbar:cache-favicon",
+        payload: { host, href }
+      }).catch(() => {});
+    } catch {
+      // Ignore invalid bookmark URLs.
+    }
+  }
+
+  function faviconCandidates(url, cache = {}) {
     try {
       const parsed = new URL(url);
       if (!/^https?:$/.test(parsed.protocol)) {
         return [];
       }
 
-      return [
-        `https://icons.duckduckgo.com/ip3/${parsed.hostname}.ico`,
-        `${parsed.origin}/favicon.ico`,
-        `${parsed.origin}/apple-touch-icon.png`,
-        `${parsed.origin}/apple-touch-icon-precomposed.png`
+      const candidates = [
+        cache?.[parsed.hostname]?.startsWith("data:image/") ? cache[parsed.hostname] : null
       ];
+
+      return candidates.filter(Boolean);
     } catch {
       return [];
     }
+  }
+
+  function fallbackInitial(item) {
+    const source = item.title || friendlyHostname(item.url);
+    return source.trim().slice(0, 1).toUpperCase() || "?";
+  }
+
+  function friendlyHostname(url) {
+    try {
+      return new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      return "";
+    }
+  }
+
+  function singleEmoji(value) {
+    const title = (value || "").trim();
+    if (!title) {
+      return null;
+    }
+
+    const graphemes = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
+      ? Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(title), (part) => part.segment)
+      : Array.from(title);
+
+    if (graphemes.length !== 1) {
+      return null;
+    }
+
+    return /\p{Extended_Pictographic}/u.test(graphemes[0]) ? graphemes[0] : null;
   }
 
   function buildPathChain(pathKey) {
@@ -606,15 +1110,37 @@ async function initHoverbar() {
   document.addEventListener("click", (event) => {
     const path = event.composedPath();
     if (!path.includes(host)) {
+      hideContextMenu();
       closeMenus();
     }
   });
 
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      const path = event.composedPath();
+      if (!path.includes(contextMenu)) {
+        hideContextMenu();
+      }
+    },
+    true
+  );
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      hideContextMenu();
       closeMenus();
     }
   });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      resetTransientState();
+    }
+  });
+
+  window.addEventListener("blur", resetTransientState);
+  window.addEventListener("pagehide", resetTransientState);
 
   shell.addEventListener("pointerleave", (event) => {
     const nextTarget = event.relatedTarget;
@@ -703,6 +1229,18 @@ async function initHoverbar() {
     true
   );
 
+  document.addEventListener(
+    "dragover",
+    (event) => {
+      if (!draggedItem) {
+        return;
+      }
+
+      syncDragOpenToPoint(event.clientX, event.clientY);
+    },
+    true
+  );
+
   scrollContainer.addEventListener(
     "wheel",
     (event) => {
@@ -729,10 +1267,14 @@ async function initHoverbar() {
 
     state = message.payload;
     setThemeVars(state.theme);
+    setSettingsVars(state.settings);
+    setZoomVars(state.zoom);
     render();
   });
 
   state = await browser.runtime.sendMessage({ type: "hoverbar:get-state" });
   setThemeVars(state.theme);
+  setSettingsVars(state.settings);
+  setZoomVars(state.zoom);
   render();
 }

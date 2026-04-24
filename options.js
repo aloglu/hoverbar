@@ -1,10 +1,11 @@
 const checkbox = document.getElementById("show-names");
 const folderCheckbox = document.getElementById("show-folder-names");
-const status = document.getElementById("status");
+const folderColorSwatch = document.getElementById("folder-color-swatch");
+const folderColorText = document.getElementById("folder-color-text");
+const folderIconMode = document.getElementById("folder-icon-mode");
 
 init().catch((error) => {
   console.error("Hoverbar options failed to load", error);
-  status.textContent = "Settings could not be loaded.";
 });
 
 if (browser.theme?.onUpdated) {
@@ -23,30 +24,60 @@ folderCheckbox.addEventListener("change", async () => {
   await save();
 });
 
+folderColorText.addEventListener("input", async () => {
+  const normalized = normalizeColor(folderColorText.value);
+  if (!normalized) {
+    return;
+  }
+
+  folderColorText.value = normalized;
+  updateFolderColorSwatch(normalized);
+  await save();
+});
+
+folderIconMode.addEventListener("change", async () => {
+  await save();
+});
+
 async function init() {
-  const [{ showNames = false, showFolderNames = true }] = await Promise.all([
+  const [{ showNames = false, showFolderNames = true, folderColor: savedFolderColor = "", folderIconMode: savedFolderIconMode = "emoji" }] = await Promise.all([
     browser.storage.local.get({
       showNames: false,
-      showFolderNames: true
+      showFolderNames: true,
+      folderColor: "",
+      folderIconMode: "emoji"
     }),
     applyTheme()
   ]);
 
   checkbox.checked = showNames;
   folderCheckbox.checked = showFolderNames;
+  folderColorText.value = normalizeColor(savedFolderColor) || "#d0a21b";
+  updateFolderColorSwatch(folderColorText.value);
+  folderIconMode.value = normalizeFolderIconMode(savedFolderIconMode);
 }
 
 async function save() {
+  const normalizedFolderColor = normalizeColor(folderColorText.value) || "#d0a21b";
+
   await browser.storage.local.set({
     showNames: checkbox.checked,
-    showFolderNames: folderCheckbox.checked
+    showFolderNames: folderCheckbox.checked,
+    folderColor: normalizedFolderColor,
+    folderIconMode: normalizeFolderIconMode(folderIconMode.value)
   });
+}
 
-  status.textContent = "Saved.";
-  window.clearTimeout(window.__hoverbarStatusTimer);
-  window.__hoverbarStatusTimer = window.setTimeout(() => {
-    status.textContent = "";
-  }, 1200);
+function normalizeColor(value) {
+  return /^#[0-9a-f]{6}$/i.test(value) ? value : "";
+}
+
+function updateFolderColorSwatch(value) {
+  folderColorSwatch.style.backgroundColor = normalizeColor(value) || "#d0a21b";
+}
+
+function normalizeFolderIconMode(value) {
+  return ["emoji", "folder", "both"].includes(value) ? value : "emoji";
 }
 
 async function applyTheme() {
@@ -62,41 +93,15 @@ async function applyTheme() {
     return;
   }
 
-  const colors = theme?.colors ?? {};
   const root = document.documentElement;
+  const colors = theme?.colors ?? {};
   const background = firstColor(colors.popup, colors.toolbar, colors.frame);
-  const foreground = firstColor(colors.popup_text, colors.toolbar_text, colors.tab_text) || readableText(background);
-  const panel = firstColor(colors.toolbar_field, colors.popup, colors.toolbar, colors.frame);
-  const accent = firstColor(colors.icons_attention, colors.button_background_active, colors.toolbar_text, colors.popup_text);
-  const border = firstColor(colors.popup_border, colors.toolbar_field_border, foreground ? withAlpha(foreground, 0.16) : null);
   const mode = theme?.properties?.color_scheme || theme?.properties?.content_color_scheme || (background ? (isDark(background) ? "dark" : "light") : null);
-
-  setVar("--page-bg", background);
-  setVar("--text", foreground);
-  setVar("--panel", panel);
-  setVar("--panel-border", border);
-  setVar("--divider", foreground ? withAlpha(foreground, 0.12) : null);
-  setVar("--muted", foreground ? withAlpha(foreground, 0.72) : null);
-  setVar("--soft", foreground ? withAlpha(foreground, 0.64) : null);
-  setVar("--eyebrow", foreground ? withAlpha(foreground, 0.72) : null);
-  setVar("--switch-track", foreground ? withAlpha(foreground, 0.28) : null);
-  setVar("--switch-track-on", accent);
-  setVar("--switch-thumb", background || panel);
-  setVar("--switch-focus", accent ? withAlpha(accent, 0.28) : null);
-  setVar("--status", accent);
 
   if (mode) {
     root.style.colorScheme = mode;
   } else {
     root.style.removeProperty("color-scheme");
-  }
-
-  function setVar(name, value) {
-    if (value) {
-      root.style.setProperty(name, value);
-    } else {
-      root.style.removeProperty(name);
-    }
   }
 }
 

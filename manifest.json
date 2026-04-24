@@ -22,7 +22,7 @@
     "96": "icons/hoverbar.svg"
   },
   "action": {
-    "default_title": "Hoverbar settings",
+    "default_title": "Hoverbar",
     "default_popup": "options.html",
     "default_icon": {
       "48": "icons/hoverbar.svg",

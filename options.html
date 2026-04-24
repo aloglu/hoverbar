@@ -4,39 +4,75 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hoverbar Settings</title>
+    <style>
+      html,
+      body {
+        width: 460px;
+        min-width: 460px;
+        max-width: 460px;
+        margin: 0;
+        overflow: hidden;
+      }
+    </style>
     <link rel="stylesheet" href="options.css">
   </head>
   <body>
     <main class="popup">
-      <header class="settings-header">
-        <p class="eyebrow">Hoverbar</p>
-        <h1>Bookmarks overlay</h1>
-        <p class="lede">
-          Tune how your Bookmarks Toolbar appears inside the page overlay.
-        </p>
-      </header>
-
       <section class="panel" aria-label="Display settings">
-        <label class="setting-row">
-          <span class="setting-copy">
-            <strong>Show bookmark names</strong>
-            <small>Show titles next to top-level toolbar items.</small>
+        <header class="settings-header">
+          <h1>Hoverbar</h1>
+          <span class="title-bookmarks" aria-hidden="true">
+            <svg class="title-bookmark title-bookmark-red" viewBox="0 0 16 24" focusable="false">
+              <path d="M2 2h12v19l-6-4-6 4z"></path>
+            </svg>
+            <svg class="title-bookmark title-bookmark-yellow" viewBox="0 0 16 24" focusable="false">
+              <path d="M2 2h12v19l-6-4-6 4z"></path>
+            </svg>
+            <svg class="title-bookmark title-bookmark-teal" viewBox="0 0 16 24" focusable="false">
+              <path d="M2 2h12v19l-6-4-6 4z"></path>
+            </svg>
           </span>
-          <input id="show-names" class="switch-input" type="checkbox" role="switch">
-          <span class="switch" aria-hidden="true"></span>
-        </label>
+        </header>
 
-        <label class="setting-row">
-          <span class="setting-copy">
-            <strong>Show names inside folders</strong>
-            <small>Keep folder menus readable even when the main bar stays icon-only.</small>
-          </span>
-          <input id="show-folder-names" class="switch-input" type="checkbox" role="switch">
-          <span class="switch" aria-hidden="true"></span>
-        </label>
+        <div class="settings-grid">
+          <label class="setting-row">
+            <span class="setting-copy">
+              <strong>Show bookmark names</strong>
+            </span>
+            <input id="show-names" class="switch-input" type="checkbox" role="switch">
+            <span class="switch" aria-hidden="true"></span>
+          </label>
+
+          <label class="setting-row">
+            <span class="setting-copy">
+              <strong>Show names inside folders</strong>
+            </span>
+            <input id="show-folder-names" class="switch-input" type="checkbox" role="switch">
+            <span class="switch" aria-hidden="true"></span>
+          </label>
+
+          <div class="setting-row">
+            <span class="setting-copy">
+              <strong>Folder icon color</strong>
+            </span>
+            <span class="color-control">
+              <span id="folder-color-swatch" class="color-swatch" aria-hidden="true"></span>
+              <input id="folder-color-text" class="color-text-input" type="text" value="#d0a21b" aria-label="Folder color hex value" spellcheck="false">
+            </span>
+          </div>
+
+          <label class="setting-row">
+            <span class="setting-copy">
+              <strong>Folder icon style</strong>
+            </span>
+            <select id="folder-icon-mode" class="select-input">
+              <option value="emoji">Emoji when available</option>
+              <option value="folder">Folder only</option>
+              <option value="both">Folder and emoji</option>
+            </select>
+          </label>
+        </div>
       </section>
-
-      <p id="status" class="status" aria-live="polite"></p>
     </main>
 
     <script src="options.js"></script>
