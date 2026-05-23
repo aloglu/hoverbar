@@ -20,16 +20,32 @@ async function initHoverbar() {
 
   const shell = document.createElement("div");
   shell.className = "hoverbar-shell";
-  shell.innerHTML = `
-    <div class="hoverbar-hitbox" aria-hidden="true"></div>
-    <div class="hoverbar-panel">
-      <div class="hoverbar-scroll">
-        <div class="hoverbar-items" role="toolbar" aria-label="Hoverbar bookmarks"></div>
-      </div>
-    </div>
-    <div class="hoverbar-popups"></div>
-    <div class="hoverbar-context-menu" hidden></div>
-  `;
+
+  const hitbox = document.createElement("div");
+  hitbox.className = "hoverbar-hitbox";
+  hitbox.setAttribute("aria-hidden", "true");
+
+  const panel = document.createElement("div");
+  panel.className = "hoverbar-panel";
+
+  const scroll = document.createElement("div");
+  scroll.className = "hoverbar-scroll";
+
+  const items = document.createElement("div");
+  items.className = "hoverbar-items";
+  items.setAttribute("role", "toolbar");
+  items.setAttribute("aria-label", "Hoverbar bookmarks");
+
+  const popups = document.createElement("div");
+  popups.className = "hoverbar-popups";
+
+  const contextMenuElement = document.createElement("div");
+  contextMenuElement.className = "hoverbar-context-menu";
+  contextMenuElement.hidden = true;
+
+  scroll.append(items);
+  panel.append(scroll);
+  shell.append(hitbox, panel, popups, contextMenuElement);
 
   root.append(stylesheet, shell);
 
@@ -866,6 +882,37 @@ async function initHoverbar() {
     return separator;
   }
 
+  function createEditField(classPrefix, labelText, name, options = {}) {
+    const label = document.createElement("label");
+    label.className = `${classPrefix}-edit-field`;
+
+    const labelContent = document.createElement("span");
+    labelContent.textContent = labelText;
+
+    const input = document.createElement("input");
+    input.className = `${classPrefix}-edit-input`;
+    input.name = name;
+    input.type = "text";
+    input.spellcheck = false;
+    input.required = Boolean(options.required);
+
+    label.append(labelContent, input);
+    return label;
+  }
+
+  function createEditButton(classPrefix, label, type, options = {}) {
+    const button = document.createElement("button");
+    button.className = `${classPrefix}-edit-button${
+      options.primary ? ` ${classPrefix}-edit-primary` : ""
+    }`;
+    button.type = type;
+    button.textContent = label;
+    if (options.action) {
+      button.dataset.action = options.action;
+    }
+    return button;
+  }
+
   function hideContextMenu() {
     if (contextMenu) {
       contextMenu.hidden = true;
@@ -882,22 +929,22 @@ async function initHoverbar() {
 
     editDialog = document.createElement("form");
     editDialog.className = "hoverbar-edit-dialog";
-    editDialog.innerHTML = `
-      <label class="hoverbar-edit-field">
-        <span>Name</span>
-        <input class="hoverbar-edit-input" name="title" type="text" spellcheck="false">
-      </label>
-      ${item.type === "bookmark" ? `
-        <label class="hoverbar-edit-field">
-          <span>URL</span>
-          <input class="hoverbar-edit-input" name="url" type="text" spellcheck="false" required>
-        </label>
-      ` : ""}
-      <div class="hoverbar-edit-actions">
-        <button class="hoverbar-edit-button" type="button" data-action="cancel">Cancel</button>
-        <button class="hoverbar-edit-button hoverbar-edit-primary" type="submit">Save</button>
-      </div>
-    `;
+
+    const titleField = createEditField("hoverbar", "Name", "title");
+    const actions = document.createElement("div");
+    actions.className = "hoverbar-edit-actions";
+    actions.append(
+      createEditButton("hoverbar", "Cancel", "button", { action: "cancel" }),
+      createEditButton("hoverbar", "Save", "submit", { primary: true })
+    );
+
+    editDialog.append(titleField);
+    if (item.type === "bookmark") {
+      editDialog.append(
+        createEditField("hoverbar", "URL", "url", { required: true })
+      );
+    }
+    editDialog.append(actions);
 
     editDialog.elements.title.value = item.title || "";
     if (item.type === "bookmark") {

@@ -635,6 +635,37 @@ async function init() {
     return separator;
   }
 
+  function createEditField(classPrefix, labelText, name, options = {}) {
+    const label = document.createElement("label");
+    label.className = `${classPrefix}-edit-field`;
+
+    const labelContent = document.createElement("span");
+    labelContent.textContent = labelText;
+
+    const input = document.createElement("input");
+    input.className = `${classPrefix}-edit-input`;
+    input.name = name;
+    input.type = "text";
+    input.spellcheck = false;
+    input.required = Boolean(options.required);
+
+    label.append(labelContent, input);
+    return label;
+  }
+
+  function createEditButton(classPrefix, label, type, options = {}) {
+    const button = document.createElement("button");
+    button.className = `${classPrefix}-edit-button${
+      options.primary ? ` ${classPrefix}-edit-primary` : ""
+    }`;
+    button.type = type;
+    button.textContent = label;
+    if (options.action) {
+      button.dataset.action = options.action;
+    }
+    return button;
+  }
+
   function hideContextMenu() {
     if (contextMenu) {
       contextMenu.hidden = true;
@@ -651,22 +682,22 @@ async function init() {
 
     editDialog = document.createElement("form");
     editDialog.className = "newtab-edit-dialog";
-    editDialog.innerHTML = `
-      <label class="newtab-edit-field">
-        <span>Name</span>
-        <input class="newtab-edit-input" name="title" type="text" spellcheck="false">
-      </label>
-      ${item.type === "bookmark" ? `
-        <label class="newtab-edit-field">
-          <span>URL</span>
-          <input class="newtab-edit-input" name="url" type="text" spellcheck="false" required>
-        </label>
-      ` : ""}
-      <div class="newtab-edit-actions">
-        <button class="newtab-edit-button" type="button" data-action="cancel">Cancel</button>
-        <button class="newtab-edit-button newtab-edit-primary" type="submit">Save</button>
-      </div>
-    `;
+
+    const titleField = createEditField("newtab", "Name", "title");
+    const actions = document.createElement("div");
+    actions.className = "newtab-edit-actions";
+    actions.append(
+      createEditButton("newtab", "Cancel", "button", { action: "cancel" }),
+      createEditButton("newtab", "Save", "submit", { primary: true })
+    );
+
+    editDialog.append(titleField);
+    if (item.type === "bookmark") {
+      editDialog.append(
+        createEditField("newtab", "URL", "url", { required: true })
+      );
+    }
+    editDialog.append(actions);
 
     editDialog.elements.title.value = item.title || "";
     if (item.type === "bookmark") {
