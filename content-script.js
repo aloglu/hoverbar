@@ -12,9 +12,8 @@ if (
 
 async function initHoverbar() {
   const host = document.createElement("div");
-  host.id = "hoverbar-host";
 
-  const root = host.attachShadow({ mode: "open" });
+  const root = host.attachShadow({ mode: "closed" });
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
   stylesheet.href = browser.runtime.getURL("overlay.css");
@@ -42,6 +41,11 @@ async function initHoverbar() {
 
   applyHost();
 
+  const hostObserver = new MutationObserver(() => {
+    applyHost();
+  });
+  hostObserver.observe(document.documentElement, { childList: true });
+
   if (document.readyState === "loading") {
     document.addEventListener("readystatechange", applyHost, { passive: true });
   }
@@ -63,10 +67,13 @@ async function initHoverbar() {
   let draggedItem = null;
   let dragOpenTimer = null;
   let dragOpenTargetId = null;
+  let editDialog = null;
   let layoutScale = 1;
+  let baseDevicePixelRatio = null;
+  let zoomSyncFrame = null;
   const menuScrollTops = new Map();
   const POINTER_GRACE_PX = 10;
-  const TOP_REOPEN_PX = 10;
+  const EDGE_REOPEN_PX = 10;
 
   function setThemeVars(theme) {
     setVar("--hoverbar-bg", theme.background);
@@ -78,12 +85,37 @@ async function initHoverbar() {
 
   function setSettingsVars(settings) {
     setShellVar("--hoverbar-folder-color", settings.folderColor);
+    setShellVar("--hoverbar-icon-size", iconSizeForPreset(settings.iconSizePreset));
+    setShellVar(
+      "--hoverbar-menu-icon-size",
+      settings.resizeFolderMenuIcons ? iconSizeForPreset(settings.iconSizePreset) : iconSizeForPreset("default")
+    );
   }
 
-  function setZoomVars(zoom) {
+  function setZoomVars(zoom, resetBaseline = true) {
     const normalizedZoom = typeof zoom === "number" && zoom > 0 ? zoom : 1;
+    if (resetBaseline && window.devicePixelRatio > 0) {
+      baseDevicePixelRatio = window.devicePixelRatio / normalizedZoom;
+    }
     layoutScale = 1 / normalizedZoom;
     shell.style.setProperty("--hoverbar-zoom-scale", String(layoutScale));
+  }
+
+  function syncZoomFromDevicePixelRatio() {
+    if (!baseDevicePixelRatio || window.devicePixelRatio <= 0) {
+      return;
+    }
+
+    setZoomVars(window.devicePixelRatio / baseDevicePixelRatio, false);
+    renderPopups();
+  }
+
+  function scheduleLocalZoomSync() {
+    window.cancelAnimationFrame(zoomSyncFrame);
+    zoomSyncFrame = window.requestAnimationFrame(() => {
+      zoomSyncFrame = null;
+      syncZoomFromDevicePixelRatio();
+    });
   }
 
   function setVar(name, value) {
@@ -136,7 +168,7 @@ async function initHoverbar() {
     window.clearTimeout(closeTimer);
     closeTimer = window.setTimeout(() => {
       const active = root.activeElement;
-      if (active && host.contains(active)) {
+      if (active && root.contains(active)) {
         return;
       }
 
@@ -230,7 +262,7 @@ async function initHoverbar() {
   }
 
   function didLeaveTowardBrowserChrome(event) {
-    return !event.relatedTarget && event.clientY <= TOP_REOPEN_PX;
+    return currentBarPosition() === "top" && !event.relatedTarget && event.clientY <= EDGE_REOPEN_PX;
   }
 
   function render() {
@@ -242,6 +274,13 @@ async function initHoverbar() {
     itemMap = buildItemMap(state.items);
     shell.classList.toggle("show-names", Boolean(state.settings.showNames));
     shell.classList.toggle("show-folder-names", Boolean(state.settings.showFolderNames));
+    shell.classList.toggle("resize-folder-menu-icons", Boolean(state.settings.resizeFolderMenuIcons));
+    shell.classList.toggle("position-top", state.settings.barPosition === "top");
+    shell.classList.toggle("position-bottom", state.settings.barPosition === "bottom");
+    shell.classList.toggle("position-left", state.settings.barPosition === "left");
+    shell.classList.toggle("position-right", state.settings.barPosition === "right");
+    shell.classList.toggle("spacing-compact", state.settings.spacingPreset === "compact");
+    shell.classList.toggle("spacing-comfortable", state.settings.spacingPreset === "comfortable");
     shell.classList.toggle("menus-open", openMenuPath.length > 0);
     shell.classList.toggle("always-visible", alwaysVisible);
     shell.classList.toggle("grace-open", hoverVisible);
@@ -253,6 +292,11 @@ async function initHoverbar() {
   function renderItem(item, pathKey) {
     const wrapper = document.createElement("div");
     wrapper.className = "hoverbar-item";
+
+    if (item.type === "separator") {
+      wrapper.append(createBookmarkSeparator(item));
+      return wrapper;
+    }
 
     if (item.type === "bookmark") {
       wrapper.append(createBookmark(item));
@@ -293,7 +337,9 @@ async function initHoverbar() {
       const row = document.createElement("div");
       row.className = "hoverbar-menu-row";
 
-      if (child.type === "bookmark") {
+      if (child.type === "separator") {
+        row.append(createBookmarkSeparator(child, true));
+      } else if (child.type === "bookmark") {
         row.append(createBookmark(child, true));
       } else {
         const button = document.createElement("button");
@@ -348,6 +394,10 @@ async function initHoverbar() {
       positionMenu(menu, anchor, pathKey);
       bindMenuInteractions(menu);
     }
+
+    if (editDialog) {
+      popupLayer.append(editDialog);
+    }
   }
 
   function positionMenu(menu, anchor, pathKey) {
@@ -365,40 +415,51 @@ async function initHoverbar() {
     popupLayer.append(menu);
 
     const menuRect = menu.getBoundingClientRect();
-    let left = nested ? rect.right - 1 : rect.left;
-    let top = nested ? rect.top - 4 : rect.bottom + gap;
+    const position = currentBarPosition();
     const spaceBelow = viewportHeight - rect.bottom - viewportPadding;
     const spaceAbove = rect.top - viewportPadding;
-    const maxHeight = Math.max(
-      120,
-      Math.min(
-        viewportHeight - viewportPadding * 2,
-        nested ? Math.max(spaceBelow + gap, spaceAbove + gap) : Math.max(spaceBelow, spaceAbove)
-      )
-    );
+    const viewportMaxHeight = Math.max(80, viewportHeight - viewportPadding * 2);
+    const opensSideways = nested || position === "left" || position === "right";
+    const opensUp = !nested && (position === "bottom" || (position === "top" && menuRect.height > spaceBelow && spaceAbove > spaceBelow));
+    const availableHeight = opensSideways
+      ? viewportMaxHeight
+      : Math.max(0, opensUp ? rect.top - viewportPadding - gap : viewportHeight - rect.bottom - viewportPadding - gap);
+    const maxHeight = Math.max(Math.min(120, viewportMaxHeight), Math.min(viewportMaxHeight, availableHeight));
+    const menuHeight = Math.min(menuRect.height, maxHeight);
+    let left;
+    let top;
 
-    if (!nested && menuRect.height > spaceBelow && spaceAbove > spaceBelow) {
-      top = Math.max(viewportPadding, rect.top - gap - maxHeight);
-    }
-
-    if (nested) {
-      top = Math.max(viewportPadding, Math.min(top, viewportHeight - maxHeight - viewportPadding));
+    if (nested || position === "left") {
+      left = rect.right + gap;
+      top = rect.top;
+    } else if (position === "right") {
+      left = rect.left - menuRect.width - gap;
+      top = rect.top;
+    } else if (opensUp) {
+      left = rect.left;
+      top = rect.top - gap - menuHeight;
+    } else {
+      left = rect.left;
+      top = rect.bottom + gap;
     }
 
     if (left + menuRect.width > viewportWidth - viewportPadding) {
-      left = nested ? rect.left - menuRect.width - gap : viewportWidth - menuRect.width - viewportPadding;
+      left = nested || position === "left" ? rect.left - menuRect.width - gap : viewportWidth - menuRect.width - viewportPadding;
+    }
+
+    if (left < viewportPadding) {
+      if ((nested || position === "right") && rect.right + gap + menuRect.width <= viewportWidth - viewportPadding) {
+        left = rect.right + gap;
+      }
     }
 
     if (left < viewportPadding) {
       left = viewportPadding;
     }
 
-    if (top + maxHeight > viewportHeight - viewportPadding) {
-      top = Math.max(viewportPadding, viewportHeight - maxHeight - viewportPadding);
-    }
+    top = Math.max(viewportPadding, Math.min(top, viewportHeight - menuHeight - viewportPadding));
 
-    menu.style.left = `${left / layoutScale}px`;
-    menu.style.top = `${top / layoutScale}px`;
+    setLayerPosition(menu, left, top);
     menu.style.maxHeight = `${maxHeight / layoutScale}px`;
     menu.style.visibility = "visible";
     menu.scrollTop = menuScrollTops.get(pathKey) || 0;
@@ -458,9 +519,17 @@ async function initHoverbar() {
     anchor.append(buildIcon(item), buildLabel(item.title, inMenu));
     const closeAfterActivation = () => {
       closeMenus();
-      suppressHoverUntilTopReentry();
+      suppressHoverUntilEdgeReentry();
     };
-    anchor.addEventListener("click", closeAfterActivation);
+    anchor.addEventListener("click", (event) => {
+      if (state?.settings?.bookmarkOpenBehavior === "new-tab" && isPlainPrimaryClick(event)) {
+        event.preventDefault();
+        openItem(item, "tab");
+        return;
+      }
+
+      closeAfterActivation();
+    });
     anchor.addEventListener("auxclick", (event) => {
       if (event.button === 1) {
         closeAfterActivation();
@@ -468,6 +537,17 @@ async function initHoverbar() {
     });
     bindItemInteractions(anchor, item);
     return anchor;
+  }
+
+  function createBookmarkSeparator(item, inMenu = false) {
+    const separator = document.createElement("div");
+    separator.className = inMenu ? "hoverbar-bookmark-separator hoverbar-menu-bookmark-separator" : "hoverbar-bookmark-separator";
+    separator.setAttribute("role", "separator");
+    separator.setAttribute("aria-orientation", inMenu ? "horizontal" : "vertical");
+    separator.title = "Divider";
+    setItemDataset(separator, item);
+    bindItemInteractions(separator, item);
+    return separator;
   }
 
   function setItemDataset(element, item) {
@@ -479,9 +559,6 @@ async function initHoverbar() {
     if (Number.isInteger(item.index)) {
       element.dataset.index = String(item.index);
     }
-    if (item.url) {
-      element.dataset.url = item.url;
-    }
   }
 
   function bindItemInteractions(element, item) {
@@ -490,8 +567,8 @@ async function initHoverbar() {
       hideContextMenu();
       draggedItem = item;
       event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.clearData();
       event.dataTransfer.setData("application/x-hoverbar-bookmark-id", item.id);
-      event.dataTransfer.setData("text/plain", item.url || item.title);
       element.classList.add("is-dragging");
     });
     element.addEventListener("dragend", () => {
@@ -654,7 +731,7 @@ async function initHoverbar() {
 
   function getDropOperation(target, event) {
     const rect = event.currentTarget.getBoundingClientRect();
-    const horizontal = !event.currentTarget.closest(".hoverbar-menu");
+    const horizontal = !event.currentTarget.closest(".hoverbar-menu") && !isSidePosition();
     const coordinate = horizontal ? event.clientX - rect.left : event.clientY - rect.top;
     const size = horizontal ? rect.width : rect.height;
     const beforeEdge = size * 0.28;
@@ -728,12 +805,36 @@ async function initHoverbar() {
     }
 
     contextMenu.replaceChildren();
-    contextMenu.append(
-      createContextAction("Open in New Tab", () => openItem(item, "tab"), !item.url),
-      createContextAction("Open in New Window", () => openItem(item, "window"), !item.url),
-      createContextSeparator(),
-      createContextAction(`Delete ${item.type === "folder" ? "Folder" : "Bookmark"}`, () => removeItem(item))
-    );
+    if (item.type === "bookmark") {
+      contextMenu.append(
+        createContextAction("Open in New Tab", () => openItem(item, "tab")),
+        createContextAction("Open in New Window", () => openItem(item, "window")),
+        createContextSeparator(),
+        createContextAction("Edit Bookmark", () => editItem(item)),
+        createContextSeparator(),
+        createContextAction("Add Divider Before", () => addSeparatorNear(item, "before")),
+        createContextAction("Add Divider After", () => addSeparatorNear(item, "after")),
+        createContextSeparator(),
+        createContextAction("Delete Bookmark", () => removeItem(item))
+      );
+    } else if (item.type === "folder") {
+      contextMenu.append(
+        createContextAction("Edit Folder", () => editItem(item)),
+        createContextSeparator(),
+        createContextAction("Add Divider Before", () => addSeparatorNear(item, "before")),
+        createContextAction("Add Divider After", () => addSeparatorNear(item, "after")),
+        createContextAction("Add Divider Inside", () => addSeparatorInside(item)),
+        createContextSeparator(),
+        createContextAction("Delete Folder", () => removeItem(item))
+      );
+    } else {
+      contextMenu.append(
+        createContextAction("Add Divider Before", () => addSeparatorNear(item, "before")),
+        createContextAction("Add Divider After", () => addSeparatorNear(item, "after")),
+        createContextSeparator(),
+        createContextAction("Delete Divider", () => removeItem(item))
+      );
+    }
     contextMenu.hidden = false;
     contextMenu.style.left = "0px";
     contextMenu.style.top = "0px";
@@ -742,8 +843,7 @@ async function initHoverbar() {
     const padding = 8;
     const left = Math.min(clientX, document.documentElement.clientWidth - rect.width - padding);
     const top = Math.min(clientY, document.documentElement.clientHeight - rect.height - padding);
-    contextMenu.style.left = `${Math.max(padding, left) / layoutScale}px`;
-    contextMenu.style.top = `${Math.max(padding, top) / layoutScale}px`;
+    setLayerPosition(contextMenu, Math.max(padding, left), Math.max(padding, top));
   }
 
   function createContextAction(label, action, disabled = false) {
@@ -772,6 +872,106 @@ async function initHoverbar() {
     }
   }
 
+  function showEditDialog(item) {
+    if (!popupLayer || item.type === "separator") {
+      return;
+    }
+
+    hideEditDialog();
+    closeMenus();
+
+    editDialog = document.createElement("form");
+    editDialog.className = "hoverbar-edit-dialog";
+    editDialog.innerHTML = `
+      <label class="hoverbar-edit-field">
+        <span>Name</span>
+        <input class="hoverbar-edit-input" name="title" type="text" spellcheck="false">
+      </label>
+      ${item.type === "bookmark" ? `
+        <label class="hoverbar-edit-field">
+          <span>URL</span>
+          <input class="hoverbar-edit-input" name="url" type="text" spellcheck="false" required>
+        </label>
+      ` : ""}
+      <div class="hoverbar-edit-actions">
+        <button class="hoverbar-edit-button" type="button" data-action="cancel">Cancel</button>
+        <button class="hoverbar-edit-button hoverbar-edit-primary" type="submit">Save</button>
+      </div>
+    `;
+
+    editDialog.elements.title.value = item.title || "";
+    if (item.type === "bookmark") {
+      editDialog.elements.url.value = item.url || "";
+    }
+
+    editDialog.addEventListener("click", (event) => {
+      if (event.target?.dataset?.action === "cancel") {
+        hideEditDialog();
+      }
+    });
+
+    editDialog.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const payload = {
+        id: item.id,
+        title: editDialog.elements.title.value
+      };
+
+      if (item.type === "bookmark") {
+        const url = editDialog.elements.url.value.trim();
+        if (!url) {
+          editDialog.elements.url.focus();
+          return;
+        }
+        payload.url = url;
+      }
+
+      browser.runtime.sendMessage({
+        type: "hoverbar:update-bookmark",
+        payload
+      }).then((response) => {
+        if (!response?.ok) {
+          showEditError("Could not save changes.");
+          return;
+        }
+        hideEditDialog();
+        closeMenus();
+      }).catch((error) => {
+        console.warn("Hoverbar bookmark update failed", error);
+        showEditError("Could not save changes.");
+      });
+    });
+
+    popupLayer.append(editDialog);
+    const rect = editDialog.getBoundingClientRect();
+    setLayerPosition(
+      editDialog,
+      (document.documentElement.clientWidth - rect.width) / 2,
+      Math.max(12, (document.documentElement.clientHeight - rect.height) / 2)
+    );
+    editDialog.elements.title.focus();
+    editDialog.elements.title.select();
+  }
+
+  function hideEditDialog() {
+    editDialog?.remove();
+    editDialog = null;
+  }
+
+  function showEditError(message) {
+    if (!editDialog) {
+      return;
+    }
+
+    let error = editDialog.querySelector(".hoverbar-edit-error");
+    if (!error) {
+      error = document.createElement("p");
+      error.className = "hoverbar-edit-error";
+      editDialog.querySelector(".hoverbar-edit-actions")?.before(error);
+    }
+    error.textContent = message;
+  }
+
   function resetTransientState() {
     if (alwaysVisible) {
       return;
@@ -788,6 +988,7 @@ async function initHoverbar() {
     hoverSuppressed = false;
     chromeHoverHold = false;
     hideContextMenu();
+    hideEditDialog();
     clearDropTargets();
     shell.classList.remove("menus-open", "grace-open", "suppress-open");
     renderPopups();
@@ -805,11 +1006,46 @@ async function initHoverbar() {
         where
       }
     });
-    suppressHoverUntilTopReentry();
+    suppressHoverUntilEdgeReentry();
+  }
+
+  async function editItem(item) {
+    showEditDialog(item);
+  }
+
+  async function addSeparatorNear(item, position) {
+    if (!item.parentId || !Number.isInteger(item.index)) {
+      return;
+    }
+
+    await browser.runtime.sendMessage({
+      type: "hoverbar:create-separator",
+      payload: {
+        parentId: item.parentId,
+        index: item.index + (position === "after" ? 1 : 0)
+      }
+    });
+  }
+
+  async function addSeparatorInside(item) {
+    if (item.type !== "folder") {
+      return;
+    }
+
+    await browser.runtime.sendMessage({
+      type: "hoverbar:create-separator",
+      payload: {
+        parentId: item.id
+      }
+    });
+    const pathKey = findPathById(item.id);
+    if (pathKey) {
+      setOpenMenuPath(buildPathChain(pathKey));
+    }
   }
 
   async function removeItem(item) {
-    const confirmed = window.confirm(`Delete ${item.type === "folder" ? "folder" : "bookmark"} "${item.title}"?`);
+    const confirmed = window.confirm(deleteConfirmationText(item));
     if (!confirmed) {
       return;
     }
@@ -822,6 +1058,14 @@ async function initHoverbar() {
       }
     });
     closeMenus();
+  }
+
+  function deleteConfirmationText(item) {
+    if (item.type === "separator") {
+      return "Delete this divider?";
+    }
+
+    return `Delete ${item.type === "folder" ? "folder" : "bookmark"} "${item.title}"?`;
   }
 
   function buildIcon(item) {
@@ -938,7 +1182,7 @@ async function initHoverbar() {
 
   function cacheFavicon(url, href) {
     try {
-      const host = new URL(url).hostname;
+      const host = new URL(url).host;
       browser.runtime.sendMessage({
         type: "hoverbar:cache-favicon",
         payload: { host, href }
@@ -956,7 +1200,8 @@ async function initHoverbar() {
       }
 
       const candidates = [
-        cache?.[parsed.hostname]?.startsWith("data:image/") ? cache[parsed.hostname] : null
+        cache?.[parsed.host]?.startsWith("data:image/") ? cache[parsed.host] : null,
+        !parsed.port && cache?.[parsed.hostname]?.startsWith("data:image/") ? cache[parsed.hostname] : null
       ];
 
       return candidates.filter(Boolean);
@@ -993,6 +1238,18 @@ async function initHoverbar() {
     }
 
     return /\p{Extended_Pictographic}/u.test(graphemes[0]) ? graphemes[0] : null;
+  }
+
+  function iconSizeForPreset(value) {
+    if (value === "small") {
+      return "16px";
+    }
+
+    if (value === "large") {
+      return "24px";
+    }
+
+    return "20px";
   }
 
   function buildPathChain(pathKey) {
@@ -1072,7 +1329,13 @@ async function initHoverbar() {
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
   }
 
-  function suppressHoverUntilTopReentry() {
+  function setLayerPosition(element, viewportLeft, viewportTop) {
+    const shellRect = shell.getBoundingClientRect();
+    element.style.left = `${(viewportLeft - shellRect.left) / layoutScale}px`;
+    element.style.top = `${(viewportTop - shellRect.top) / layoutScale}px`;
+  }
+
+  function suppressHoverUntilEdgeReentry() {
     if (alwaysVisible) {
       return;
     }
@@ -1107,10 +1370,51 @@ async function initHoverbar() {
     return dominantDelta;
   }
 
+  function currentBarPosition() {
+    return state?.settings?.barPosition || "top";
+  }
+
+  function isSidePosition() {
+    return ["left", "right"].includes(currentBarPosition());
+  }
+
+  function pointerIsPastReentryEdge(event) {
+    const position = currentBarPosition();
+    if (position === "bottom") {
+      return event.clientY < document.documentElement.clientHeight - EDGE_REOPEN_PX;
+    }
+    if (position === "left") {
+      return event.clientX > EDGE_REOPEN_PX;
+    }
+    if (position === "right") {
+      return event.clientX < document.documentElement.clientWidth - EDGE_REOPEN_PX;
+    }
+    return event.clientY > EDGE_REOPEN_PX;
+  }
+
+  function pointerIsAtReentryEdge(event) {
+    const position = currentBarPosition();
+    if (position === "bottom") {
+      return event.clientY >= document.documentElement.clientHeight - EDGE_REOPEN_PX;
+    }
+    if (position === "left") {
+      return event.clientX <= EDGE_REOPEN_PX;
+    }
+    if (position === "right") {
+      return event.clientX >= document.documentElement.clientWidth - EDGE_REOPEN_PX;
+    }
+    return event.clientY <= EDGE_REOPEN_PX;
+  }
+
+  function isPlainPrimaryClick(event) {
+    return event.button === 0 && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+  }
+
   document.addEventListener("click", (event) => {
     const path = event.composedPath();
     if (!path.includes(host)) {
       hideContextMenu();
+      hideEditDialog();
       closeMenus();
     }
   });
@@ -1119,8 +1423,21 @@ async function initHoverbar() {
     "pointerdown",
     (event) => {
       const path = event.composedPath();
-      if (!path.includes(contextMenu)) {
+      if (!path.includes(host)) {
         hideContextMenu();
+      }
+    },
+    true
+  );
+
+  root.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!event.composedPath().includes(contextMenu)) {
+        hideContextMenu();
+      }
+      if (editDialog && !event.composedPath().includes(editDialog)) {
+        hideEditDialog();
       }
     },
     true
@@ -1128,6 +1445,7 @@ async function initHoverbar() {
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      hideEditDialog();
       hideContextMenu();
       closeMenus();
     }
@@ -1140,7 +1458,13 @@ async function initHoverbar() {
   });
 
   window.addEventListener("blur", resetTransientState);
-  window.addEventListener("pagehide", resetTransientState);
+  window.addEventListener("resize", scheduleLocalZoomSync, { passive: true });
+  window.visualViewport?.addEventListener("resize", scheduleLocalZoomSync, { passive: true });
+  window.addEventListener("pagehide", () => {
+    hostObserver.disconnect();
+    window.cancelAnimationFrame(zoomSyncFrame);
+    resetTransientState();
+  });
 
   shell.addEventListener("pointerleave", (event) => {
     const nextTarget = event.relatedTarget;
@@ -1158,7 +1482,7 @@ async function initHoverbar() {
   });
 
   shell.addEventListener("pointerenter", (event) => {
-    if (hoverSuppressed && event.clientY > TOP_REOPEN_PX) {
+    if (hoverSuppressed && pointerIsPastReentryEdge(event)) {
       return;
     }
 
@@ -1196,7 +1520,7 @@ async function initHoverbar() {
     "pointermove",
     (event) => {
       if (chromeHoverHold) {
-        if (event.clientY <= TOP_REOPEN_PX || isPointInsideHoverbar(event.clientX, event.clientY)) {
+        if (pointerIsAtReentryEdge(event) || isPointInsideHoverbar(event.clientX, event.clientY)) {
           cancelClose();
           setHoverVisible(true);
           return;
@@ -1206,7 +1530,7 @@ async function initHoverbar() {
       }
 
       if (hoverSuppressed) {
-        if (event.clientY <= TOP_REOPEN_PX) {
+        if (pointerIsAtReentryEdge(event)) {
           clearHoverSuppression();
           setHoverVisible(true);
         }
@@ -1250,17 +1574,31 @@ async function initHoverbar() {
       }
 
       const maxScroll = scrollContainer.scrollWidth - scrollContainer.clientWidth;
-      if (maxScroll <= 0) {
+      const maxVerticalScroll = scrollContainer.scrollHeight - scrollContainer.clientHeight;
+      if (!isSidePosition() && maxScroll <= 0) {
+        return;
+      }
+      if (isSidePosition() && maxVerticalScroll <= 0) {
         return;
       }
 
-      scrollContainer.scrollLeft += delta;
+      if (isSidePosition()) {
+        scrollContainer.scrollTop += delta;
+      } else {
+        scrollContainer.scrollLeft += delta;
+      }
       event.preventDefault();
     },
     { passive: false }
   );
 
   browser.runtime.onMessage.addListener((message) => {
+    if (message?.type === "hoverbar:zoom") {
+      setZoomVars(message.payload?.zoom);
+      renderPopups();
+      return;
+    }
+
     if (message?.type !== "hoverbar:update") {
       return;
     }

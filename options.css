@@ -43,7 +43,8 @@ body {
   width: 460px;
   min-width: 460px;
   max-width: 460px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--panel);
   color: var(--text);
 }

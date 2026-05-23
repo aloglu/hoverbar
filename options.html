@@ -11,7 +11,8 @@
         min-width: 460px;
         max-width: 460px;
         margin: 0;
-        overflow: hidden;
+        overflow-x: hidden;
+        overflow-y: auto;
       }
     </style>
     <link rel="stylesheet" href="options.css">
@@ -37,6 +38,36 @@
         <div class="settings-grid">
           <label class="setting-row">
             <span class="setting-copy">
+              <strong>Show Hoverbar on newtab</strong>
+            </span>
+            <input id="show-newtab-bar" class="switch-input" type="checkbox" role="switch">
+            <span class="switch" aria-hidden="true"></span>
+          </label>
+
+          <label class="setting-row">
+            <span class="setting-copy">
+              <strong>Bar position</strong>
+            </span>
+            <select id="bar-position" class="select-input">
+              <option value="top">Top</option>
+              <option value="bottom">Bottom</option>
+              <option value="left">Left</option>
+              <option value="right">Right</option>
+            </select>
+          </label>
+
+          <label class="setting-row">
+            <span class="setting-copy">
+              <strong>Open bookmarks</strong>
+            </span>
+            <select id="bookmark-open-behavior" class="select-input">
+              <option value="current-tab">Current tab</option>
+              <option value="new-tab">New tab</option>
+            </select>
+          </label>
+
+          <label class="setting-row">
+            <span class="setting-copy">
               <strong>Show bookmark names</strong>
             </span>
             <input id="show-names" class="switch-input" type="checkbox" role="switch">
@@ -51,15 +82,35 @@
             <span class="switch" aria-hidden="true"></span>
           </label>
 
-          <div class="setting-row">
+          <label class="setting-row">
             <span class="setting-copy">
-              <strong>Folder icon color</strong>
+              <strong>Icon size</strong>
             </span>
-            <span class="color-control">
-              <span id="folder-color-swatch" class="color-swatch" aria-hidden="true"></span>
-              <input id="folder-color-text" class="color-text-input" type="text" value="#d0a21b" aria-label="Folder color hex value" spellcheck="false">
+            <select id="icon-size-preset" class="select-input">
+              <option value="small">Small</option>
+              <option value="default">Default</option>
+              <option value="large">Large</option>
+            </select>
+          </label>
+
+          <label class="setting-row">
+            <span class="setting-copy">
+              <strong>Apply icon size inside folders</strong>
             </span>
-          </div>
+            <input id="resize-folder-menu-icons" class="switch-input" type="checkbox" role="switch">
+            <span class="switch" aria-hidden="true"></span>
+          </label>
+
+          <label class="setting-row">
+            <span class="setting-copy">
+              <strong>Spacing</strong>
+            </span>
+            <select id="spacing-preset" class="select-input">
+              <option value="compact">Compact</option>
+              <option value="default">Default</option>
+              <option value="comfortable">Comfortable</option>
+            </select>
+          </label>
 
           <label class="setting-row">
             <span class="setting-copy">
@@ -71,6 +122,16 @@
               <option value="both">Folder and emoji</option>
             </select>
           </label>
+
+          <div class="setting-row">
+            <span class="setting-copy">
+              <strong>Folder icon color</strong>
+            </span>
+            <span class="color-control">
+              <span id="folder-color-swatch" class="color-swatch" aria-hidden="true"></span>
+              <input id="folder-color-text" class="color-text-input" type="text" placeholder="#D0A21B" aria-label="Folder color hex value" spellcheck="false">
+            </span>
+          </div>
         </div>
       </section>
     </main>

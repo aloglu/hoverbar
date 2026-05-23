@@ -4,8 +4,15 @@ const DEFAULT_SETTINGS = {
   showFolderNames: true,
   folderColor: "",
   folderIconMode: "emoji",
+  showNewtabBar: true,
+  iconSizePreset: "default",
+  resizeFolderMenuIcons: true,
+  bookmarkOpenBehavior: "current-tab",
+  barPosition: "top",
+  spacingPreset: "default",
   faviconCache: {}
 };
+const MAX_FAVICON_DATA_URL_LENGTH = 96 * 1024;
 
 init().catch((error) => {
   console.error("Hoverbar new tab failed", error);
@@ -26,6 +33,11 @@ async function init() {
   let draggedItem = null;
   let dragOpenTimer = null;
   let dragOpenTargetId = null;
+  let editDialog = null;
+  let currentTabId = null;
+  let layoutScale = 1;
+  let baseDevicePixelRatio = null;
+  let zoomSyncFrame = null;
   const menuScrollTops = new Map();
   const POINTER_GRACE_PX = 10;
 
@@ -89,10 +101,29 @@ async function init() {
       return;
     }
 
+    if (!state.settings.showNewtabBar) {
+      shell.hidden = true;
+      itemsContainer.replaceChildren();
+      anchorMap = new Map();
+      itemMap = new Map();
+      openMenuPath = [];
+      hideContextMenu();
+      renderPopups();
+      return;
+    }
+
+    shell.hidden = false;
     anchorMap = new Map();
     itemMap = buildItemMap(state.items);
     shell.classList.toggle("show-names", Boolean(state.settings.showNames));
     shell.classList.toggle("show-folder-names", Boolean(state.settings.showFolderNames));
+    shell.classList.toggle("resize-folder-menu-icons", Boolean(state.settings.resizeFolderMenuIcons));
+    shell.classList.toggle("position-top", state.settings.barPosition === "top");
+    shell.classList.toggle("position-bottom", state.settings.barPosition === "bottom");
+    shell.classList.toggle("position-left", state.settings.barPosition === "left");
+    shell.classList.toggle("position-right", state.settings.barPosition === "right");
+    shell.classList.toggle("spacing-compact", state.settings.spacingPreset === "compact");
+    shell.classList.toggle("spacing-comfortable", state.settings.spacingPreset === "comfortable");
     itemsContainer.replaceChildren(...state.items.map((item, index) => renderItem(item, `${index}`)));
     renderPopups();
   }
@@ -100,6 +131,11 @@ async function init() {
   function renderItem(item, pathKey) {
     const wrapper = document.createElement("div");
     wrapper.className = "newtab-item";
+
+    if (item.type === "separator") {
+      wrapper.append(createBookmarkSeparator(item));
+      return wrapper;
+    }
 
     if (item.type === "bookmark") {
       wrapper.append(createBookmark(item));
@@ -135,7 +171,9 @@ async function init() {
       const row = document.createElement("div");
       row.className = "newtab-menu-row";
 
-      if (child.type === "bookmark") {
+      if (child.type === "separator") {
+        row.append(createBookmarkSeparator(child, true));
+      } else if (child.type === "bookmark") {
         row.append(createBookmark(child, true));
       } else {
         const button = document.createElement("button");
@@ -182,6 +220,10 @@ async function init() {
       const menu = createMenu(node.children, pathKey);
       positionMenu(menu, anchor, pathKey);
     }
+
+    if (editDialog) {
+      popupLayer.append(editDialog);
+    }
   }
 
   function positionMenu(menu, anchor, pathKey) {
@@ -198,41 +240,52 @@ async function init() {
     popupLayer.append(menu);
 
     const menuRect = menu.getBoundingClientRect();
-    let left = nested ? rect.right - 1 : rect.left;
-    let top = nested ? rect.top - 4 : rect.bottom + gap;
+    const position = currentBarPosition();
     const spaceBelow = viewportHeight - rect.bottom - viewportPadding;
     const spaceAbove = rect.top - viewportPadding;
-    const maxHeight = Math.max(
-      120,
-      Math.min(
-        viewportHeight - viewportPadding * 2,
-        nested ? Math.max(spaceBelow + gap, spaceAbove + gap) : Math.max(spaceBelow, spaceAbove)
-      )
-    );
+    const viewportMaxHeight = Math.max(80, viewportHeight - viewportPadding * 2);
+    const opensSideways = nested || position === "left" || position === "right";
+    const opensUp = !nested && (position === "bottom" || (position === "top" && menuRect.height > spaceBelow && spaceAbove > spaceBelow));
+    const availableHeight = opensSideways
+      ? viewportMaxHeight
+      : Math.max(0, opensUp ? rect.top - viewportPadding - gap : viewportHeight - rect.bottom - viewportPadding - gap);
+    const maxHeight = Math.max(Math.min(120, viewportMaxHeight), Math.min(viewportMaxHeight, availableHeight));
+    const menuHeight = Math.min(menuRect.height, maxHeight);
+    let left;
+    let top;
 
-    if (!nested && menuRect.height > spaceBelow && spaceAbove > spaceBelow) {
-      top = Math.max(viewportPadding, rect.top - gap - maxHeight);
-    }
-
-    if (nested) {
-      top = Math.max(viewportPadding, Math.min(top, viewportHeight - maxHeight - viewportPadding));
+    if (nested || position === "left") {
+      left = rect.right + gap;
+      top = rect.top;
+    } else if (position === "right") {
+      left = rect.left - menuRect.width - gap;
+      top = rect.top;
+    } else if (opensUp) {
+      left = rect.left;
+      top = rect.top - gap - menuHeight;
+    } else {
+      left = rect.left;
+      top = rect.bottom + gap;
     }
 
     if (left + menuRect.width > viewportWidth - viewportPadding) {
-      left = nested ? rect.left - menuRect.width - gap : viewportWidth - menuRect.width - viewportPadding;
+      left = nested || position === "left" ? rect.left - menuRect.width - gap : viewportWidth - menuRect.width - viewportPadding;
+    }
+
+    if (left < viewportPadding) {
+      if ((nested || position === "right") && rect.right + gap + menuRect.width <= viewportWidth - viewportPadding) {
+        left = rect.right + gap;
+      }
     }
 
     if (left < viewportPadding) {
       left = viewportPadding;
     }
 
-    if (top + maxHeight > viewportHeight - viewportPadding) {
-      top = Math.max(viewportPadding, viewportHeight - maxHeight - viewportPadding);
-    }
+    top = Math.max(viewportPadding, Math.min(top, viewportHeight - menuHeight - viewportPadding));
 
-    menu.style.left = `${left}px`;
-    menu.style.top = `${top}px`;
-    menu.style.maxHeight = `${maxHeight}px`;
+    setLayerPosition(menu, left, top);
+    menu.style.maxHeight = `${maxHeight / layoutScale}px`;
     menu.style.visibility = "visible";
     menu.scrollTop = menuScrollTops.get(pathKey) || 0;
   }
@@ -244,11 +297,27 @@ async function init() {
     anchor.title = item.title;
     setItemDataset(anchor, item);
     anchor.append(buildIcon(item), buildLabel(item.title, inMenu));
-    anchor.addEventListener("click", () => {
+    anchor.addEventListener("click", (event) => {
+      if (state?.settings?.bookmarkOpenBehavior === "new-tab" && isPlainPrimaryClick(event)) {
+        event.preventDefault();
+        openItem(item, "tab");
+        return;
+      }
       setOpenMenuPath([]);
     });
     bindItemInteractions(anchor, item);
     return anchor;
+  }
+
+  function createBookmarkSeparator(item, inMenu = false) {
+    const separator = document.createElement("div");
+    separator.className = inMenu ? "newtab-bookmark-separator newtab-menu-bookmark-separator" : "newtab-bookmark-separator";
+    separator.setAttribute("role", "separator");
+    separator.setAttribute("aria-orientation", inMenu ? "horizontal" : "vertical");
+    separator.title = "Divider";
+    setItemDataset(separator, item);
+    bindItemInteractions(separator, item);
+    return separator;
   }
 
   function setItemDataset(element, item) {
@@ -260,9 +329,6 @@ async function init() {
     if (Number.isInteger(item.index)) {
       element.dataset.index = String(item.index);
     }
-    if (item.url) {
-      element.dataset.url = item.url;
-    }
   }
 
   function bindItemInteractions(element, item) {
@@ -271,6 +337,7 @@ async function init() {
       hideContextMenu();
       draggedItem = item;
       event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.clearData();
       event.dataTransfer.setData("application/x-hoverbar-bookmark-id", item.id);
       event.dataTransfer.setData("text/plain", item.url || item.title);
       element.classList.add("is-dragging");
@@ -435,7 +502,7 @@ async function init() {
 
   function getDropOperation(target, event) {
     const rect = event.currentTarget.getBoundingClientRect();
-    const horizontal = !event.currentTarget.closest(".newtab-menu");
+    const horizontal = !event.currentTarget.closest(".newtab-menu") && !isSidePosition();
     const coordinate = horizontal ? event.clientX - rect.left : event.clientY - rect.top;
     const size = horizontal ? rect.width : rect.height;
 
@@ -507,12 +574,36 @@ async function init() {
     }
 
     contextMenu.replaceChildren();
-    contextMenu.append(
-      createContextAction("Open in New Tab", () => openItem(item, "tab"), !item.url),
-      createContextAction("Open in New Window", () => openItem(item, "window"), !item.url),
-      createContextSeparator(),
-      createContextAction(`Delete ${item.type === "folder" ? "Folder" : "Bookmark"}`, () => removeItem(item))
-    );
+    if (item.type === "bookmark") {
+      contextMenu.append(
+        createContextAction("Open in New Tab", () => openItem(item, "tab")),
+        createContextAction("Open in New Window", () => openItem(item, "window")),
+        createContextSeparator(),
+        createContextAction("Edit Bookmark", () => editItem(item)),
+        createContextSeparator(),
+        createContextAction("Add Divider Before", () => addSeparatorNear(item, "before")),
+        createContextAction("Add Divider After", () => addSeparatorNear(item, "after")),
+        createContextSeparator(),
+        createContextAction("Delete Bookmark", () => removeItem(item))
+      );
+    } else if (item.type === "folder") {
+      contextMenu.append(
+        createContextAction("Edit Folder", () => editItem(item)),
+        createContextSeparator(),
+        createContextAction("Add Divider Before", () => addSeparatorNear(item, "before")),
+        createContextAction("Add Divider After", () => addSeparatorNear(item, "after")),
+        createContextAction("Add Divider Inside", () => addSeparatorInside(item)),
+        createContextSeparator(),
+        createContextAction("Delete Folder", () => removeItem(item))
+      );
+    } else {
+      contextMenu.append(
+        createContextAction("Add Divider Before", () => addSeparatorNear(item, "before")),
+        createContextAction("Add Divider After", () => addSeparatorNear(item, "after")),
+        createContextSeparator(),
+        createContextAction("Delete Divider", () => removeItem(item))
+      );
+    }
     contextMenu.hidden = false;
     contextMenu.style.left = "0px";
     contextMenu.style.top = "0px";
@@ -521,8 +612,7 @@ async function init() {
     const padding = 8;
     const left = Math.min(clientX, document.documentElement.clientWidth - rect.width - padding);
     const top = Math.min(clientY, document.documentElement.clientHeight - rect.height - padding);
-    contextMenu.style.left = `${Math.max(padding, left)}px`;
-    contextMenu.style.top = `${Math.max(padding, top)}px`;
+    setLayerPosition(contextMenu, Math.max(padding, left), Math.max(padding, top));
   }
 
   function createContextAction(label, action, disabled = false) {
@@ -551,6 +641,106 @@ async function init() {
     }
   }
 
+  function showEditDialog(item) {
+    if (!popupLayer || item.type === "separator") {
+      return;
+    }
+
+    hideEditDialog();
+    setOpenMenuPath([]);
+
+    editDialog = document.createElement("form");
+    editDialog.className = "newtab-edit-dialog";
+    editDialog.innerHTML = `
+      <label class="newtab-edit-field">
+        <span>Name</span>
+        <input class="newtab-edit-input" name="title" type="text" spellcheck="false">
+      </label>
+      ${item.type === "bookmark" ? `
+        <label class="newtab-edit-field">
+          <span>URL</span>
+          <input class="newtab-edit-input" name="url" type="text" spellcheck="false" required>
+        </label>
+      ` : ""}
+      <div class="newtab-edit-actions">
+        <button class="newtab-edit-button" type="button" data-action="cancel">Cancel</button>
+        <button class="newtab-edit-button newtab-edit-primary" type="submit">Save</button>
+      </div>
+    `;
+
+    editDialog.elements.title.value = item.title || "";
+    if (item.type === "bookmark") {
+      editDialog.elements.url.value = item.url || "";
+    }
+
+    editDialog.addEventListener("click", (event) => {
+      if (event.target?.dataset?.action === "cancel") {
+        hideEditDialog();
+      }
+    });
+
+    editDialog.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const payload = {
+        id: item.id,
+        title: editDialog.elements.title.value
+      };
+
+      if (item.type === "bookmark") {
+        const url = editDialog.elements.url.value.trim();
+        if (!url) {
+          editDialog.elements.url.focus();
+          return;
+        }
+        payload.url = url;
+      }
+
+      browser.runtime.sendMessage({
+        type: "hoverbar:update-bookmark",
+        payload
+      }).then((response) => {
+        if (!response?.ok) {
+          showEditError("Could not save changes.");
+          return;
+        }
+        hideEditDialog();
+        setOpenMenuPath([]);
+      }).catch((error) => {
+        console.warn("Hoverbar bookmark update failed", error);
+        showEditError("Could not save changes.");
+      });
+    });
+
+    popupLayer.append(editDialog);
+    const rect = editDialog.getBoundingClientRect();
+    setLayerPosition(
+      editDialog,
+      (document.documentElement.clientWidth - rect.width) / 2,
+      Math.max(12, (document.documentElement.clientHeight - rect.height) / 2)
+    );
+    editDialog.elements.title.focus();
+    editDialog.elements.title.select();
+  }
+
+  function hideEditDialog() {
+    editDialog?.remove();
+    editDialog = null;
+  }
+
+  function showEditError(message) {
+    if (!editDialog) {
+      return;
+    }
+
+    let error = editDialog.querySelector(".newtab-edit-error");
+    if (!error) {
+      error = document.createElement("p");
+      error.className = "newtab-edit-error";
+      editDialog.querySelector(".newtab-edit-actions")?.before(error);
+    }
+    error.textContent = message;
+  }
+
   async function openItem(item, where) {
     if (!item.url) {
       return;
@@ -567,7 +757,7 @@ async function init() {
   }
 
   async function removeItem(item) {
-    const confirmed = window.confirm(`Delete ${item.type === "folder" ? "folder" : "bookmark"} "${item.title}"?`);
+    const confirmed = window.confirm(deleteConfirmationText(item));
     if (!confirmed) {
       return;
     }
@@ -580,6 +770,49 @@ async function init() {
       }
     });
     setOpenMenuPath([]);
+  }
+
+  async function editItem(item) {
+    showEditDialog(item);
+  }
+
+  async function addSeparatorNear(item, position) {
+    if (!item.parentId || !Number.isInteger(item.index)) {
+      return;
+    }
+
+    await browser.runtime.sendMessage({
+      type: "hoverbar:create-separator",
+      payload: {
+        parentId: item.parentId,
+        index: item.index + (position === "after" ? 1 : 0)
+      }
+    });
+  }
+
+  async function addSeparatorInside(item) {
+    if (item.type !== "folder") {
+      return;
+    }
+
+    await browser.runtime.sendMessage({
+      type: "hoverbar:create-separator",
+      payload: {
+        parentId: item.id
+      }
+    });
+    const pathKey = findPathById(item.id);
+    if (pathKey) {
+      setOpenMenuPath(buildPathChain(pathKey));
+    }
+  }
+
+  function deleteConfirmationText(item) {
+    if (item.type === "separator") {
+      return "Delete this divider?";
+    }
+
+    return `Delete ${item.type === "folder" ? "folder" : "bookmark"} "${item.title}"?`;
   }
 
   function buildIcon(item) {
@@ -695,7 +928,7 @@ async function init() {
 
   function cacheFavicon(url, href) {
     try {
-      const host = new URL(url).hostname;
+      const host = new URL(url).host;
       browser.runtime.sendMessage({
         type: "hoverbar:cache-favicon",
         payload: { host, href }
@@ -713,7 +946,8 @@ async function init() {
       }
 
       const candidates = [
-        cache?.[parsed.hostname]?.startsWith("data:image/") ? cache[parsed.hostname] : null
+        cache?.[parsed.host]?.startsWith("data:image/") ? cache[parsed.host] : null,
+        !parsed.port && cache?.[parsed.hostname]?.startsWith("data:image/") ? cache[parsed.hostname] : null
       ];
 
       return candidates.filter(Boolean);
@@ -874,6 +1108,12 @@ async function init() {
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
   }
 
+  function setLayerPosition(element, viewportLeft, viewportTop) {
+    const shellRect = shell.getBoundingClientRect();
+    element.style.left = `${(viewportLeft - shellRect.left) / layoutScale}px`;
+    element.style.top = `${(viewportTop - shellRect.top) / layoutScale}px`;
+  }
+
   function normalizeWheelDelta(event, itemHeight) {
     const dominantDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
     if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
@@ -891,7 +1131,38 @@ async function init() {
     setVar("--hoverbar-border", theme.border);
     setVar("--hoverbar-shadow", theme.shadow);
     setVar("--hoverbar-folder-color", state.settings.folderColor);
+    setVar("--hoverbar-icon-size", iconSizeForPreset(state.settings.iconSizePreset));
+    setVar(
+      "--hoverbar-menu-icon-size",
+      state.settings.resizeFolderMenuIcons ? iconSizeForPreset(state.settings.iconSizePreset) : iconSizeForPreset("default")
+    );
     document.documentElement.style.colorScheme = theme.mode || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  }
+
+  function setZoomVars(zoom, resetBaseline = true) {
+    const normalizedZoom = typeof zoom === "number" && zoom > 0 ? zoom : 1;
+    if (resetBaseline && window.devicePixelRatio > 0) {
+      baseDevicePixelRatio = window.devicePixelRatio / normalizedZoom;
+    }
+    layoutScale = 1 / normalizedZoom;
+    document.documentElement.style.setProperty("--hoverbar-zoom-scale", String(layoutScale));
+  }
+
+  function syncZoomFromDevicePixelRatio() {
+    if (!baseDevicePixelRatio || window.devicePixelRatio <= 0) {
+      return;
+    }
+
+    setZoomVars(window.devicePixelRatio / baseDevicePixelRatio, false);
+    renderPopups();
+  }
+
+  function scheduleLocalZoomSync() {
+    window.cancelAnimationFrame(zoomSyncFrame);
+    zoomSyncFrame = window.requestAnimationFrame(() => {
+      zoomSyncFrame = null;
+      syncZoomFromDevicePixelRatio();
+    });
   }
 
   function setVar(name, value) {
@@ -899,6 +1170,16 @@ async function init() {
       document.documentElement.style.setProperty(name, value);
     } else {
       document.documentElement.style.removeProperty(name);
+    }
+  }
+
+  async function reloadState(reason) {
+    try {
+      await loadState();
+      setThemeVars(state.theme);
+      render();
+    } catch (error) {
+      console.warn(`Hoverbar new tab ${reason} update failed`, error);
     }
   }
 
@@ -917,12 +1198,30 @@ async function init() {
         showNames: Boolean(settings.showNames),
         showFolderNames: Boolean(settings.showFolderNames),
         folderColor: typeof settings.folderColor === "string" ? settings.folderColor : "",
-        folderIconMode: normalizeFolderIconMode(settings.folderIconMode)
+        folderIconMode: normalizeFolderIconMode(settings.folderIconMode),
+        showNewtabBar: settings.showNewtabBar !== false,
+        iconSizePreset: normalizeIconSizePreset(settings.iconSizePreset),
+        resizeFolderMenuIcons: settings.resizeFolderMenuIcons !== false,
+        bookmarkOpenBehavior: normalizeBookmarkOpenBehavior(settings.bookmarkOpenBehavior),
+        barPosition: normalizeBarPosition(settings.barPosition),
+        spacingPreset: normalizeSpacingPreset(settings.spacingPreset)
       },
       items: sanitizeNodes(subtree?.[0]?.children ?? []),
       theme: buildTheme(theme),
-      faviconCache: sanitizeFaviconCache(settings.faviconCache)
+      faviconCache: filterFaviconCacheForItems(subtree?.[0]?.children ?? [], sanitizeFaviconCache(settings.faviconCache))
     };
+  }
+
+  async function loadCurrentTabZoom() {
+    if (!currentTabId || !browser.tabs?.getZoom) {
+      return 1;
+    }
+
+    try {
+      return await browser.tabs.getZoom(currentTabId);
+    } catch {
+      return 1;
+    }
   }
 
   function sanitizeFaviconCache(cache) {
@@ -932,29 +1231,145 @@ async function init() {
 
     return Object.fromEntries(
       Object.entries(cache).filter(([host, href]) => (
-        typeof host === "string" &&
-        typeof href === "string" &&
-        (/^https?:\/\//.test(href) || /^data:image\//.test(href))
+        normalizeFaviconKey(host) === host &&
+        isAllowedFaviconHref(href)
       ))
     );
+  }
+
+  function normalizeFaviconKey(host) {
+    if (typeof host !== "string" || !host) {
+      return "";
+    }
+
+    try {
+      return new URL(`https://${host}`).host;
+    } catch {
+      return "";
+    }
+  }
+
+  function isAllowedFaviconHref(href) {
+    return (
+      typeof href === "string" &&
+      (/^https?:\/\//.test(href) || /^data:image\//.test(href)) &&
+      href.length <= MAX_FAVICON_DATA_URL_LENGTH &&
+      !href.includes("icons.duckduckgo.com")
+    );
+  }
+
+  function filterFaviconCacheForItems(nodes, cache) {
+    const hosts = collectBookmarkHosts(nodes);
+    const legacyHosts = collectBookmarkLegacyHosts(nodes);
+    return Object.fromEntries(
+      Object.entries(cache).filter(([host]) => hosts.has(host) || legacyHosts.has(host))
+    );
+  }
+
+  function collectBookmarkHosts(nodes, hosts = new Set()) {
+    for (const node of nodes ?? []) {
+      if (node?.url) {
+        try {
+          const parsed = new URL(node.url);
+          if (/^https?:$/.test(parsed.protocol)) {
+            hosts.add(parsed.host);
+          }
+        } catch {
+          // Ignore invalid bookmark URLs.
+        }
+      }
+      collectBookmarkHosts(node?.children, hosts);
+    }
+    return hosts;
+  }
+
+  function collectBookmarkLegacyHosts(nodes, hosts = new Set()) {
+    for (const node of nodes ?? []) {
+      if (node?.url) {
+        try {
+          const parsed = new URL(node.url);
+          if (/^https?:$/.test(parsed.protocol) && !parsed.port) {
+            hosts.add(parsed.hostname);
+          }
+        } catch {
+          // Ignore invalid bookmark URLs.
+        }
+      }
+      collectBookmarkLegacyHosts(node?.children, hosts);
+    }
+    return hosts;
   }
 
   function normalizeFolderIconMode(value) {
     return ["emoji", "folder", "both"].includes(value) ? value : "emoji";
   }
 
+  function normalizeIconSizePreset(value) {
+    return ["small", "default", "large"].includes(value) ? value : "default";
+  }
+
+  function normalizeBookmarkOpenBehavior(value) {
+    return ["current-tab", "new-tab"].includes(value) ? value : "current-tab";
+  }
+
+  function normalizeBarPosition(value) {
+    return ["top", "bottom", "left", "right"].includes(value) ? value : "top";
+  }
+
+  function normalizeSpacingPreset(value) {
+    return ["compact", "default", "comfortable"].includes(value) ? value : "default";
+  }
+
+  function currentBarPosition() {
+    return state?.settings?.barPosition || "top";
+  }
+
+  function isSidePosition() {
+    return ["left", "right"].includes(currentBarPosition());
+  }
+
+  function isPlainPrimaryClick(event) {
+    return event.button === 0 && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+  }
+
+  function iconSizeForPreset(value) {
+    if (value === "small") {
+      return "16px";
+    }
+
+    if (value === "large") {
+      return "24px";
+    }
+
+    return "20px";
+  }
+
   function sanitizeNodes(nodes) {
     return (nodes ?? [])
-      .filter((node) => node && node.type !== "separator")
-      .map((node) => ({
-        id: node.id,
-        parentId: node.parentId || null,
-        index: Number.isInteger(node.index) ? node.index : null,
-        title: node.title || friendlyTitle(node.url),
-        url: node.url || null,
-        type: node.url ? "bookmark" : "folder",
-        children: node.url ? [] : sanitizeNodes(node.children)
-      }));
+      .filter(Boolean)
+      .map((node) => {
+        const base = {
+          id: node.id,
+          parentId: node.parentId || null,
+          index: Number.isInteger(node.index) ? node.index : null,
+          title: "",
+          url: null,
+          type: "separator",
+          children: []
+        };
+
+        if (node.type === "separator") {
+          return base;
+        }
+
+        return {
+          ...base,
+          title: node.title || friendlyTitle(node.url),
+          url: node.url || null,
+          type: node.url ? "bookmark" : "folder",
+          children: node.url ? [] : sanitizeNodes(node.children)
+        };
+      });
   }
 
   function findNode(nodes, id) {
@@ -1044,6 +1459,7 @@ async function init() {
   document.addEventListener("click", (event) => {
     hideContextMenu();
     if (!event.composedPath().some((node) => node instanceof Element && node.closest?.(".newtab-shell"))) {
+      hideEditDialog();
       closeMenus();
     }
   });
@@ -1054,12 +1470,16 @@ async function init() {
       if (!event.composedPath().includes(contextMenu)) {
         hideContextMenu();
       }
+      if (editDialog && !event.composedPath().includes(editDialog)) {
+        hideEditDialog();
+      }
     },
     true
   );
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      hideEditDialog();
       hideContextMenu();
       closeMenus();
     }
@@ -1118,50 +1538,81 @@ async function init() {
         return;
       }
       const maxScroll = scrollContainer.scrollWidth - scrollContainer.clientWidth;
-      if (maxScroll <= 0) {
+      const maxVerticalScroll = scrollContainer.scrollHeight - scrollContainer.clientHeight;
+      if (!isSidePosition() && maxScroll <= 0) {
         return;
       }
-      scrollContainer.scrollLeft += delta;
+      if (isSidePosition() && maxVerticalScroll <= 0) {
+        return;
+      }
+      if (isSidePosition()) {
+        scrollContainer.scrollTop += delta;
+      } else {
+        scrollContainer.scrollLeft += delta;
+      }
       event.preventDefault();
     },
     { passive: false }
   );
 
-  browser.bookmarks.onCreated.addListener(async () => {
-    await loadState();
-    setThemeVars(state.theme);
-    render();
+  browser.bookmarks.onCreated.addListener(() => {
+    reloadState("bookmark");
   });
-  browser.bookmarks.onRemoved.addListener(async () => {
-    await loadState();
-    setThemeVars(state.theme);
-    render();
+  browser.bookmarks.onRemoved.addListener(() => {
+    reloadState("bookmark");
   });
-  browser.bookmarks.onChanged.addListener(async () => {
-    await loadState();
-    setThemeVars(state.theme);
-    render();
+  browser.bookmarks.onChanged.addListener(() => {
+    reloadState("bookmark");
   });
-  browser.bookmarks.onMoved.addListener(async () => {
-    await loadState();
-    setThemeVars(state.theme);
-    render();
+  browser.bookmarks.onMoved.addListener(() => {
+    reloadState("bookmark");
   });
   browser.storage.onChanged.addListener(async (changes, areaName) => {
-    if (areaName !== "local" || (!changes.showNames && !changes.showFolderNames && !changes.folderColor && !changes.folderIconMode)) {
+    if (
+      areaName !== "local" ||
+      (
+        !changes.showNames &&
+        !changes.showFolderNames &&
+        !changes.folderColor &&
+        !changes.folderIconMode &&
+        !changes.showNewtabBar &&
+        !changes.iconSizePreset &&
+        !changes.resizeFolderMenuIcons &&
+        !changes.bookmarkOpenBehavior &&
+        !changes.barPosition &&
+        !changes.spacingPreset
+      )
+    ) {
       return;
     }
-    await loadState();
-    setThemeVars(state.theme);
-    render();
+    reloadState("settings");
   });
-  browser.theme.onUpdated.addListener(async () => {
-    await loadState();
-    setThemeVars(state.theme);
-    render();
+  browser.theme.onUpdated.addListener(() => {
+    reloadState("theme");
+  });
+
+  if (browser.tabs?.getCurrent) {
+    const currentTab = await browser.tabs.getCurrent().catch(() => null);
+    currentTabId = currentTab?.id ?? null;
+  }
+
+  if (currentTabId && browser.tabs?.onZoomChange) {
+    browser.tabs.onZoomChange.addListener((zoomChangeInfo) => {
+      if (zoomChangeInfo.tabId === currentTabId) {
+        setZoomVars(zoomChangeInfo.newZoomFactor);
+        renderPopups();
+      }
+    });
+  }
+
+  window.addEventListener("resize", scheduleLocalZoomSync, { passive: true });
+  window.visualViewport?.addEventListener("resize", scheduleLocalZoomSync, { passive: true });
+  window.addEventListener("pagehide", () => {
+    window.cancelAnimationFrame(zoomSyncFrame);
   });
 
   await loadState();
   setThemeVars(state.theme);
+  setZoomVars(await loadCurrentTabZoom());
   render();
 }

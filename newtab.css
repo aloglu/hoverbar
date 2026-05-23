@@ -5,6 +5,24 @@
   --hoverbar-border: color-mix(in srgb, CanvasText 14%, transparent);
   --hoverbar-shadow: rgba(15, 23, 42, 0.18);
   --hoverbar-folder-color: color-mix(in srgb, var(--hoverbar-fg) 18%, transparent);
+  --hoverbar-zoom-scale: 1;
+  --hoverbar-icon-size: 20px;
+  --hoverbar-menu-icon-size: 20px;
+  --hoverbar-current-icon-size: var(--hoverbar-icon-size);
+  --hoverbar-current-button-icon-size: var(--hoverbar-icon-size);
+  --hoverbar-bar-gap: 6px;
+  --hoverbar-bar-padding-block-start: 7px;
+  --hoverbar-bar-padding-inline: 10px;
+  --hoverbar-bar-padding-block-end: 8px;
+  --hoverbar-button-gap: 10px;
+  --hoverbar-button-padding-inline: 8px;
+  --hoverbar-button-min-size: 36px;
+  --hoverbar-menu-padding: 8px;
+  --hoverbar-context-padding: 6px;
+  --hoverbar-context-action-min-height: 30px;
+  --hoverbar-separator-cross-size: 12px;
+  --hoverbar-separator-main-size: 36px;
+  --hoverbar-separator-line-size: 24px;
   font: 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -31,7 +49,63 @@ body {
 .newtab-shell {
   position: fixed;
   inset: 0 0 auto 0;
+  width: calc(100% / var(--hoverbar-zoom-scale));
   color: var(--hoverbar-fg);
+  transform: scale(var(--hoverbar-zoom-scale));
+  transform-origin: top left;
+}
+
+.newtab-shell.spacing-compact {
+  --hoverbar-bar-gap: 4px;
+  --hoverbar-bar-padding-block-start: 5px;
+  --hoverbar-bar-padding-inline: 8px;
+  --hoverbar-bar-padding-block-end: 5px;
+  --hoverbar-button-gap: 7px;
+  --hoverbar-button-padding-inline: 6px;
+  --hoverbar-button-min-size: 32px;
+  --hoverbar-menu-padding: 6px;
+  --hoverbar-context-padding: 5px;
+  --hoverbar-context-action-min-height: 28px;
+  --hoverbar-separator-cross-size: 10px;
+  --hoverbar-separator-main-size: 32px;
+  --hoverbar-separator-line-size: 20px;
+}
+
+.newtab-shell.spacing-comfortable {
+  --hoverbar-bar-gap: 8px;
+  --hoverbar-bar-padding-block-start: 9px;
+  --hoverbar-bar-padding-inline: 12px;
+  --hoverbar-bar-padding-block-end: 10px;
+  --hoverbar-button-gap: 12px;
+  --hoverbar-button-padding-inline: 10px;
+  --hoverbar-button-min-size: 40px;
+  --hoverbar-menu-padding: 10px;
+  --hoverbar-context-padding: 8px;
+  --hoverbar-context-action-min-height: 34px;
+  --hoverbar-separator-cross-size: 14px;
+  --hoverbar-separator-main-size: 40px;
+  --hoverbar-separator-line-size: 28px;
+}
+
+.newtab-shell.position-bottom {
+  inset: auto 0 0 0;
+  transform-origin: bottom left;
+}
+
+.newtab-shell.position-left,
+.newtab-shell.position-right {
+  width: auto;
+  height: calc(100% / var(--hoverbar-zoom-scale));
+}
+
+.newtab-shell.position-left {
+  inset: 0 auto 0 0;
+  transform-origin: top left;
+}
+
+.newtab-shell.position-right {
+  inset: 0 0 0 auto;
+  transform-origin: top right;
 }
 
 .newtab-scroll {
@@ -39,6 +113,14 @@ body {
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+}
+
+.newtab-shell.position-left .newtab-scroll,
+.newtab-shell.position-right .newtab-scroll {
+  width: auto;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .newtab-scroll::-webkit-scrollbar {
@@ -49,7 +131,7 @@ body {
 .newtab-menu {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--hoverbar-bar-gap);
   background: var(--hoverbar-bg);
   color: var(--hoverbar-fg);
   border: 1px solid var(--hoverbar-border);
@@ -62,12 +144,39 @@ body {
   width: max-content;
   min-width: 100%;
   min-height: 50px;
-  padding: 7px 10px 8px;
+  padding: var(--hoverbar-bar-padding-block-start) var(--hoverbar-bar-padding-inline) var(--hoverbar-bar-padding-block-end);
   justify-content: center;
   border-left: 0;
   border-right: 0;
   border-top: 0;
   border-radius: 0;
+}
+
+.newtab-shell.position-left .newtab-items,
+.newtab-shell.position-right .newtab-items {
+  flex-direction: column;
+  width: max-content;
+  min-width: 0;
+  min-height: 100%;
+  height: max-content;
+  justify-content: flex-start;
+  border-top: 0;
+  border-bottom: 0;
+}
+
+.newtab-shell.position-left .newtab-items {
+  border-left: 0;
+  border-right: 1px solid var(--hoverbar-border);
+}
+
+.newtab-shell.position-right .newtab-items {
+  border-right: 0;
+  border-left: 1px solid var(--hoverbar-border);
+}
+
+.newtab-shell.position-bottom .newtab-items {
+  border-top: 1px solid var(--hoverbar-border);
+  border-bottom: 0;
 }
 
 .newtab-item,
@@ -85,10 +194,10 @@ body {
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  height: 36px;
-  min-width: 36px;
-  padding: 0 8px;
+  gap: var(--hoverbar-button-gap);
+  height: max(var(--hoverbar-button-min-size), calc(var(--hoverbar-current-button-icon-size) + 16px));
+  min-width: var(--hoverbar-button-min-size);
+  padding: 0 var(--hoverbar-button-padding-inline);
   border-radius: 11px;
   transition: background-color 140ms ease;
 }
@@ -99,29 +208,50 @@ body {
   outline: none;
 }
 
-.newtab-button.is-dragging {
+.newtab-button.is-dragging,
+.newtab-bookmark-separator.is-dragging {
   opacity: 0.45;
 }
 
 .newtab-button.drop-before,
 .newtab-button.drop-after,
-.newtab-button.drop-inside {
+.newtab-button.drop-inside,
+.newtab-bookmark-separator.drop-before,
+.newtab-bookmark-separator.drop-after {
   background: color-mix(in srgb, var(--hoverbar-fg) 14%, transparent);
 }
 
-.newtab-button.drop-before {
+.newtab-button.drop-before,
+.newtab-bookmark-separator.drop-before {
   box-shadow: inset 3px 0 0 var(--hoverbar-fg);
 }
 
-.newtab-button.drop-after {
+.newtab-button.drop-after,
+.newtab-bookmark-separator.drop-after {
   box-shadow: inset -3px 0 0 var(--hoverbar-fg);
 }
 
-.newtab-menu-button.drop-before {
+.newtab-menu-button.drop-before,
+.newtab-menu-bookmark-separator.drop-before {
   box-shadow: inset 0 3px 0 var(--hoverbar-fg);
 }
 
-.newtab-menu-button.drop-after {
+.newtab-menu-button.drop-after,
+.newtab-menu-bookmark-separator.drop-after {
+  box-shadow: inset 0 -3px 0 var(--hoverbar-fg);
+}
+
+.newtab-shell.position-left .newtab-items > .newtab-item > .newtab-button.drop-before,
+.newtab-shell.position-right .newtab-items > .newtab-item > .newtab-button.drop-before,
+.newtab-shell.position-left .newtab-items > .newtab-item > .newtab-bookmark-separator.drop-before,
+.newtab-shell.position-right .newtab-items > .newtab-item > .newtab-bookmark-separator.drop-before {
+  box-shadow: inset 0 3px 0 var(--hoverbar-fg);
+}
+
+.newtab-shell.position-left .newtab-items > .newtab-item > .newtab-button.drop-after,
+.newtab-shell.position-right .newtab-items > .newtab-item > .newtab-button.drop-after,
+.newtab-shell.position-left .newtab-items > .newtab-item > .newtab-bookmark-separator.drop-after,
+.newtab-shell.position-right .newtab-items > .newtab-item > .newtab-bookmark-separator.drop-after {
   box-shadow: inset 0 -3px 0 var(--hoverbar-fg);
 }
 
@@ -131,13 +261,14 @@ body {
 }
 
 .newtab-icon-wrap {
-  width: 20px;
-  height: 20px;
+  --hoverbar-current-icon-size: var(--hoverbar-icon-size);
+  width: var(--hoverbar-current-icon-size);
+  height: var(--hoverbar-current-icon-size);
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 20px;
+  flex: 0 0 var(--hoverbar-current-icon-size);
   overflow: hidden;
 }
 
@@ -145,8 +276,8 @@ body {
 .newtab-fallback-icon {
   position: absolute;
   inset: 0;
-  width: 20px;
-  height: 20px;
+  width: var(--hoverbar-current-icon-size);
+  height: var(--hoverbar-current-icon-size);
   border-radius: 5px;
 }
 
@@ -163,15 +294,15 @@ body {
   border-radius: 5px;
   background: color-mix(in srgb, var(--hoverbar-fg) 14%, transparent);
   color: color-mix(in srgb, var(--hoverbar-fg) 86%, transparent);
-  font-size: 10px;
+  font-size: calc(var(--hoverbar-current-icon-size) * 0.5);
   font-weight: 700;
   line-height: 1;
 }
 
 .newtab-folder-glyph {
   position: relative;
-  width: 18px;
-  height: 14px;
+  width: calc(var(--hoverbar-current-icon-size) * 0.9);
+  height: calc(var(--hoverbar-current-icon-size) * 0.7);
   border-radius: 4px;
   background: var(--hoverbar-folder-color);
 }
@@ -179,15 +310,15 @@ body {
 .newtab-folder-tab {
   position: absolute;
   left: 1px;
-  top: -3px;
-  width: 8px;
-  height: 5px;
+  top: calc(var(--hoverbar-current-icon-size) * -0.15);
+  width: calc(var(--hoverbar-current-icon-size) * 0.4);
+  height: calc(var(--hoverbar-current-icon-size) * 0.25);
   border-radius: 4px 4px 0 0;
   background: color-mix(in srgb, var(--hoverbar-folder-color) 86%, var(--hoverbar-fg));
 }
 
 .newtab-folder-emoji {
-  font-size: 18px;
+  font-size: calc(var(--hoverbar-current-icon-size) * 0.9);
   line-height: 1;
 }
 
@@ -198,11 +329,11 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 13px;
-  height: 13px;
+  width: calc(var(--hoverbar-current-icon-size) * 0.65);
+  height: calc(var(--hoverbar-current-icon-size) * 0.65);
   border-radius: 999px;
   background: var(--hoverbar-bg);
-  font-size: 10px;
+  font-size: calc(var(--hoverbar-current-icon-size) * 0.5);
 }
 
 .newtab-label {
@@ -221,10 +352,50 @@ body {
   display: inline;
 }
 
+.newtab-bookmark-separator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--hoverbar-separator-cross-size);
+  height: var(--hoverbar-separator-main-size);
+  border-radius: 6px;
+  cursor: default;
+}
+
+.newtab-bookmark-separator::before {
+  content: "";
+  width: 1px;
+  height: var(--hoverbar-separator-line-size);
+  background: var(--hoverbar-border);
+}
+
+.newtab-shell.position-left .newtab-items > .newtab-item > .newtab-bookmark-separator,
+.newtab-shell.position-right .newtab-items > .newtab-item > .newtab-bookmark-separator {
+  width: var(--hoverbar-separator-main-size);
+  height: var(--hoverbar-separator-cross-size);
+}
+
+.newtab-shell.position-left .newtab-items > .newtab-item > .newtab-bookmark-separator::before,
+.newtab-shell.position-right .newtab-items > .newtab-item > .newtab-bookmark-separator::before {
+  width: var(--hoverbar-separator-line-size);
+  height: 1px;
+}
+
+.newtab-menu-bookmark-separator {
+  width: 100%;
+  height: 13px;
+  margin: 2px 0;
+}
+
+.newtab-menu-bookmark-separator::before {
+  width: 100%;
+  height: 1px;
+}
+
 .newtab-menu {
   position: fixed;
   min-width: 220px;
-  padding: 8px;
+  padding: var(--hoverbar-menu-padding);
   border-radius: 16px;
   flex-direction: column;
   align-items: stretch;
@@ -241,9 +412,14 @@ body {
 }
 
 .newtab-menu-button {
+  --hoverbar-current-button-icon-size: var(--hoverbar-menu-icon-size);
   width: 100%;
   justify-content: flex-start;
   min-width: 0;
+}
+
+.newtab-menu .newtab-icon-wrap {
+  --hoverbar-current-icon-size: var(--hoverbar-menu-icon-size);
 }
 
 .newtab-popups {
@@ -255,7 +431,7 @@ body {
 .newtab-context-menu {
   position: fixed;
   min-width: 190px;
-  padding: 6px;
+  padding: var(--hoverbar-context-padding);
   border: 1px solid var(--hoverbar-border);
   border-radius: 12px;
   background: var(--hoverbar-bg);
@@ -270,7 +446,7 @@ body {
   appearance: none;
   display: block;
   width: 100%;
-  min-height: 30px;
+  min-height: var(--hoverbar-context-action-min-height);
   padding: 0 10px;
   border: 0;
   border-radius: 8px;
@@ -298,8 +474,78 @@ body {
   background: var(--hoverbar-border);
 }
 
+.newtab-edit-dialog {
+  position: fixed;
+  display: grid;
+  gap: 10px;
+  width: min(360px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid var(--hoverbar-border);
+  border-radius: 12px;
+  background: var(--hoverbar-bg);
+  color: var(--hoverbar-fg);
+  box-shadow: 0 18px 42px -18px var(--hoverbar-shadow);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  pointer-events: auto;
+  z-index: 3;
+}
+
+.newtab-edit-field {
+  display: grid;
+  gap: 5px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.newtab-edit-input {
+  width: 100%;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--hoverbar-border);
+  border-radius: 8px;
+  background: Canvas;
+  color: CanvasText;
+  font: inherit;
+  font-weight: 400;
+}
+
+.newtab-edit-input:focus {
+  outline: 2px solid color-mix(in srgb, var(--hoverbar-fg) 30%, transparent);
+  outline-offset: 1px;
+}
+
+.newtab-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.newtab-edit-error {
+  margin: -2px 0 0;
+  color: #b42318;
+  font: inherit;
+  font-size: 12px;
+}
+
+.newtab-edit-button {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--hoverbar-border);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.newtab-edit-primary {
+  background: color-mix(in srgb, var(--hoverbar-fg) 14%, transparent);
+}
+
 @media (max-width: 720px) {
   .newtab-items {
-    padding-inline: 8px;
+    padding-inline: min(8px, var(--hoverbar-bar-padding-inline));
   }
 }

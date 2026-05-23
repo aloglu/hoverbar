@@ -3,16 +3,27 @@ const DEFAULT_SETTINGS = {
   showFolderNames: true,
   folderColor: "",
   folderIconMode: "emoji",
+  showNewtabBar: true,
+  iconSizePreset: "default",
+  resizeFolderMenuIcons: true,
+  bookmarkOpenBehavior: "current-tab",
+  barPosition: "top",
+  spacingPreset: "default",
   faviconCache: {}
 };
 
 const TOOLBAR_ROOT_ID = "toolbar_____";
-const faviconWarmups = new Set();
+const MAX_FAVICON_CACHE_ENTRIES = 256;
+const MAX_FAVICON_DATA_URL_LENGTH = 96 * 1024;
 let faviconBroadcastTimer = null;
 
 browser.runtime.onInstalled.addListener(async () => {
   const current = await browser.storage.local.get(DEFAULT_SETTINGS);
-  await browser.storage.local.set({ ...DEFAULT_SETTINGS, ...current });
+  await browser.storage.local.set({
+    ...DEFAULT_SETTINGS,
+    ...current,
+    faviconCache: pruneFaviconCache(sanitizeFaviconCache(current.faviconCache))
+  });
 });
 
 browser.runtime.onMessage.addListener((message, sender) => {
@@ -29,12 +40,20 @@ browser.runtime.onMessage.addListener((message, sender) => {
     return moveBookmark(message.payload);
   }
 
+  if (message.type === "hoverbar:update-bookmark") {
+    return updateBookmark(message.payload);
+  }
+
+  if (message.type === "hoverbar:create-separator") {
+    return createSeparator(message.payload);
+  }
+
   if (message.type === "hoverbar:remove-bookmark") {
     return removeBookmark(message.payload);
   }
 
   if (message.type === "hoverbar:open-bookmark") {
-    return openBookmark(message.payload, sender.tab?.windowId);
+    return openBookmark(message.payload, sender.tab?.windowId, sender.tab?.id);
   }
 
   if (message.type === "hoverbar:cache-favicon") {
@@ -47,7 +66,18 @@ browser.runtime.onMessage.addListener((message, sender) => {
 browser.storage.onChanged.addListener((changes, areaName) => {
   if (
     areaName !== "local" ||
-    (!changes.showNames && !changes.showFolderNames && !changes.folderColor && !changes.folderIconMode)
+    (
+      !changes.showNames &&
+      !changes.showFolderNames &&
+      !changes.folderColor &&
+      !changes.folderIconMode &&
+      !changes.showNewtabBar &&
+      !changes.iconSizePreset &&
+      !changes.resizeFolderMenuIcons &&
+      !changes.bookmarkOpenBehavior &&
+      !changes.barPosition &&
+      !changes.spacingPreset
+    )
   ) {
     return;
   }
@@ -78,7 +108,7 @@ browser.theme.onUpdated.addListener((updateInfo) => {
 if (browser.tabs.onZoomChange) {
   browser.tabs.onZoomChange.addListener((zoomChangeInfo) => {
     if (zoomChangeInfo.tabId) {
-      broadcastTabState(zoomChangeInfo.tabId);
+      broadcastTabZoom(zoomChangeInfo.tabId, zoomChangeInfo.newZoomFactor);
     }
   });
 }
@@ -95,7 +125,19 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 async function broadcastState(windowId) {
-  const tabs = await browser.tabs.query(windowId ? { windowId } : {});
+  let tabs;
+  let baseState;
+  try {
+    [tabs, baseState] = await Promise.all([
+      browser.tabs.query(windowId ? { windowId } : {}),
+      buildBaseState()
+    ]);
+  } catch (error) {
+    console.warn("Hoverbar state broadcast failed", error);
+    return;
+  }
+
+  const themeByWindowId = new Map();
   await Promise.all(
     tabs.map(async (tab) => {
       if (!tab.id) {
@@ -103,7 +145,7 @@ async function broadcastState(windowId) {
       }
 
       try {
-        const state = await buildState(tab.windowId, tab.id);
+        const state = await completeState(baseState, tab.windowId, tab.id, themeByWindowId);
         await browser.tabs.sendMessage(tab.id, {
           type: "hoverbar:update",
           payload: state
@@ -132,28 +174,63 @@ async function broadcastTabState(tabId) {
   }
 }
 
+async function broadcastTabZoom(tabId, zoom) {
+  try {
+    await browser.tabs.sendMessage(tabId, {
+      type: "hoverbar:zoom",
+      payload: { zoom }
+    });
+  } catch (error) {
+    if (!`${error}`.includes("Receiving end does not exist")) {
+      console.warn("Hoverbar zoom update failed", error);
+    }
+  }
+}
+
 async function buildState(windowId, tabId) {
-  const [settings, items, theme, zoom] = await Promise.all([
+  return completeState(await buildBaseState(), windowId, tabId);
+}
+
+async function buildBaseState() {
+  const [settings, items] = await Promise.all([
     browser.storage.local.get(DEFAULT_SETTINGS),
-    loadToolbarItems(),
-    loadTheme(windowId),
-    loadZoom(tabId)
+    loadToolbarItems()
   ]);
 
-  const faviconCache = sanitizeFaviconCache(settings.faviconCache);
-  warmFaviconCache(items, faviconCache);
+  const faviconCache = filterFaviconCacheForItems(items, sanitizeFaviconCache(settings.faviconCache));
 
   return {
     settings: {
       showNames: Boolean(settings.showNames),
       showFolderNames: Boolean(settings.showFolderNames),
       folderColor: typeof settings.folderColor === "string" ? settings.folderColor : "",
-      folderIconMode: normalizeFolderIconMode(settings.folderIconMode)
+      folderIconMode: normalizeFolderIconMode(settings.folderIconMode),
+      showNewtabBar: settings.showNewtabBar !== false,
+      iconSizePreset: normalizeIconSizePreset(settings.iconSizePreset),
+      resizeFolderMenuIcons: settings.resizeFolderMenuIcons !== false,
+      bookmarkOpenBehavior: normalizeBookmarkOpenBehavior(settings.bookmarkOpenBehavior),
+      barPosition: normalizeBarPosition(settings.barPosition),
+      spacingPreset: normalizeSpacingPreset(settings.spacingPreset)
     },
     items,
-    theme,
-    zoom,
     faviconCache
+  };
+}
+
+async function completeState(baseState, windowId, tabId, themeByWindowId = new Map()) {
+  const themeKey = Number.isInteger(windowId) ? windowId : browser.windows.WINDOW_ID_CURRENT;
+  const themePromise = themeByWindowId.get(themeKey) || loadTheme(themeKey);
+  themeByWindowId.set(themeKey, themePromise);
+
+  const [theme, zoom] = await Promise.all([
+    themePromise,
+    loadZoom(tabId)
+  ]);
+
+  return {
+    ...baseState,
+    theme,
+    zoom
   };
 }
 
@@ -186,16 +263,30 @@ function findNode(nodes, id) {
 
 function sanitizeNodes(nodes) {
   return (nodes ?? [])
-    .filter((node) => node.type !== "separator")
-    .map((node) => ({
-      id: node.id,
-      parentId: node.parentId || null,
-      index: Number.isInteger(node.index) ? node.index : null,
-      title: node.title || friendlyTitle(node.url),
-      url: node.url || null,
-      type: node.url ? "bookmark" : "folder",
-      children: node.url ? [] : sanitizeNodes(node.children)
-    }));
+    .filter(Boolean)
+    .map((node) => {
+      const base = {
+        id: node.id,
+        parentId: node.parentId || null,
+        index: Number.isInteger(node.index) ? node.index : null,
+        title: "",
+        url: null,
+        type: "separator",
+        children: []
+      };
+
+      if (node.type === "separator") {
+        return base;
+      }
+
+      return {
+        ...base,
+        title: node.title || friendlyTitle(node.url),
+        url: node.url || null,
+        type: node.url ? "bookmark" : "folder",
+        children: node.url ? [] : sanitizeNodes(node.children)
+      };
+    });
 }
 
 function friendlyTitle(url) {
@@ -249,6 +340,12 @@ async function moveBookmark(payload) {
     return { ok: false };
   }
 
+  const items = await loadToolbarItems();
+  const item = findItemById(items, id);
+  if (!item || !canUseBookmarkParent(items, parentId)) {
+    return { ok: false };
+  }
+
   const destination = { parentId };
   if (Number.isInteger(index) && index >= 0) {
     destination.index = index;
@@ -258,15 +355,76 @@ async function moveBookmark(payload) {
   return { ok: true };
 }
 
-async function removeBookmark(payload) {
+async function updateBookmark(payload) {
   const id = payload?.id;
-  const type = payload?.type;
 
   if (typeof id !== "string") {
     return { ok: false };
   }
 
-  if (type === "folder") {
+  const item = findItemById(await loadToolbarItems(), id);
+  if (!item || item.type === "separator") {
+    return { ok: false };
+  }
+
+  const changes = {};
+  if (typeof payload.title === "string") {
+    changes.title = payload.title.trim();
+  }
+
+  if (item.type === "bookmark") {
+    if (typeof payload.url !== "string" || !payload.url.trim()) {
+      return { ok: false };
+    }
+    changes.url = payload.url.trim();
+  }
+
+  if (!Object.keys(changes).length) {
+    return { ok: false };
+  }
+
+  await browser.bookmarks.update(id, changes);
+  return { ok: true };
+}
+
+async function createSeparator(payload) {
+  const parentId = payload?.parentId;
+  const index = payload?.index;
+
+  if (typeof parentId !== "string") {
+    return { ok: false };
+  }
+
+  const items = await loadToolbarItems();
+  if (!canUseBookmarkParent(items, parentId)) {
+    return { ok: false };
+  }
+
+  const createDetails = {
+    type: "separator",
+    parentId
+  };
+  if (Number.isInteger(index) && index >= 0) {
+    createDetails.index = index;
+  }
+
+  await browser.bookmarks.create(createDetails);
+  return { ok: true };
+}
+
+async function removeBookmark(payload) {
+  const id = payload?.id;
+
+  if (typeof id !== "string") {
+    return { ok: false };
+  }
+
+  const item = findItemById(await loadToolbarItems(), id);
+  if (!item) {
+    return { ok: false };
+  }
+
+  if (item.type === "folder") {
     await browser.bookmarks.removeTree(id);
   } else {
     await browser.bookmarks.remove(id);
@@ -275,7 +433,7 @@ async function removeBookmark(payload) {
   return { ok: true };
 }
 
-async function openBookmark(payload, fallbackWindowId) {
+async function openBookmark(payload, fallbackWindowId, fallbackTabId) {
   const url = payload?.url;
   const where = payload?.where;
 
@@ -283,39 +441,55 @@ async function openBookmark(payload, fallbackWindowId) {
     return { ok: false };
   }
 
-  if (where === "window") {
+  if (!bookmarkUrlExists(await loadToolbarItems(), url)) {
+    return { ok: false };
+  }
+
+  if (where === "current") {
+    const tabId = Number.isInteger(payload?.tabId) ? payload.tabId : fallbackTabId;
+    if (!Number.isInteger(tabId)) {
+      return { ok: false };
+    }
+    await browser.tabs.update(tabId, { url });
+  } else if (where === "window") {
     await browser.windows.create({ url });
   } else {
-    await browser.tabs.create({
-      url,
-      windowId: payload?.windowId || fallbackWindowId
-    });
+    const createProperties = { url };
+    const windowId = payload?.windowId || fallbackWindowId;
+    if (Number.isInteger(windowId)) {
+      createProperties.windowId = windowId;
+    }
+    await browser.tabs.create(createProperties);
   }
 
   return { ok: true };
 }
 
 async function cacheFavicon(payload) {
-  const host = payload?.host;
+  const host = normalizeFaviconKey(payload?.host);
   const href = payload?.href;
 
-  if (typeof host !== "string" || typeof href !== "string" || !host || !href) {
+  if (!host || typeof href !== "string" || !isAllowedFaviconHref(href)) {
+    return { ok: false };
+  }
+
+  if (!collectBookmarkFaviconKeys(await loadToolbarItems()).has(host)) {
     return { ok: false };
   }
 
   const { faviconCache = {} } = await browser.storage.local.get({ faviconCache: {} });
   const sanitizedCache = sanitizeFaviconCache(faviconCache);
   if (sanitizedCache[host] === href) {
-    return { ok: true };
+    return { ok: true, changed: false };
   }
 
+  delete sanitizedCache[host];
+  sanitizedCache[host] = href;
+
   await browser.storage.local.set({
-    faviconCache: {
-      ...sanitizedCache,
-      [host]: href
-    }
+    faviconCache: pruneFaviconCache(sanitizedCache)
   });
-  return { ok: true };
+  return { ok: true, changed: true };
 }
 
 async function cacheTabFavicon(tabUrl, favIconUrl) {
@@ -330,6 +504,10 @@ async function cacheTabFavicon(tabUrl, favIconUrl) {
     return;
   }
 
+  if (!collectBookmarkFaviconKeys(await loadToolbarItems()).has(faviconKeyFromUrl(parsedTabUrl))) {
+    return;
+  }
+
   let href = favIconUrl;
   if (/^https?:\/\//.test(favIconUrl)) {
     href = await fetchFaviconDataUrl(favIconUrl);
@@ -337,70 +515,59 @@ async function cacheTabFavicon(tabUrl, favIconUrl) {
     return;
   }
 
-  await cacheFavicon({
-    host: parsedTabUrl.hostname,
+  const result = await cacheFavicon({
+    host: faviconKeyFromUrl(parsedTabUrl),
     href
   });
-  scheduleFaviconBroadcast();
-}
-
-function warmFaviconCache(items, cache) {
-  const bookmarkUrls = collectBookmarkUrls(items);
-  let started = 0;
-  for (const url of bookmarkUrls) {
-    if (started >= 8) {
-      return;
-    }
-
-    let parsed;
-    try {
-      parsed = new URL(url);
-    } catch {
-      continue;
-    }
-
-    if (!/^https?:$/.test(parsed.protocol) || cache[parsed.hostname]?.startsWith("data:image/") || faviconWarmups.has(parsed.hostname)) {
-      continue;
-    }
-
-    faviconWarmups.add(parsed.hostname);
-    started += 1;
-    fetchAndCacheFavicon(parsed).finally(() => {
-      faviconWarmups.delete(parsed.hostname);
-    });
+  if (result.changed) {
+    scheduleFaviconBroadcast();
   }
 }
 
-function collectBookmarkUrls(items, urls = []) {
+function collectBookmarkFaviconKeys(items, hosts = new Set()) {
   for (const item of items ?? []) {
     if (item.url) {
-      urls.push(item.url);
+      try {
+        const parsed = new URL(item.url);
+        if (/^https?:$/.test(parsed.protocol)) {
+          hosts.add(faviconKeyFromUrl(parsed));
+        }
+      } catch {
+        // Ignore invalid bookmark URLs.
+      }
     }
-    collectBookmarkUrls(item.children, urls);
+    collectBookmarkFaviconKeys(item.children, hosts);
   }
-  return urls;
+  return hosts;
 }
 
-async function fetchAndCacheFavicon(parsedUrl) {
-  const candidates = [
-    `${parsedUrl.origin}/favicon.ico`,
-    `${parsedUrl.origin}/apple-touch-icon.png`,
-    `${parsedUrl.origin}/apple-touch-icon-precomposed.png`
-  ];
+function findItemById(items, id) {
+  for (const item of items ?? []) {
+    if (item.id === id) {
+      return item;
+    }
 
-  for (const href of candidates) {
-    try {
-      const dataUrl = await fetchFaviconDataUrl(href);
-      await cacheFavicon({
-        host: parsedUrl.hostname,
-        href: dataUrl
-      });
-      scheduleFaviconBroadcast();
-      return;
-    } catch {
-      // Try the next common site-owned favicon URL.
+    const child = findItemById(item.children, id);
+    if (child) {
+      return child;
     }
   }
+
+  return null;
+}
+
+function canUseBookmarkParent(items, parentId) {
+  return parentId === TOOLBAR_ROOT_ID || findItemById(items, parentId)?.type === "folder";
+}
+
+function bookmarkUrlExists(items, url) {
+  for (const item of items ?? []) {
+    if (item.url === url || bookmarkUrlExists(item.children, url)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function fetchFaviconDataUrl(href) {
@@ -462,16 +629,85 @@ function sanitizeFaviconCache(cache) {
 
   return Object.fromEntries(
     Object.entries(cache).filter(([host, href]) => (
-      typeof host === "string" &&
-      typeof href === "string" &&
-      (/^https?:\/\//.test(href) || /^data:image\//.test(href)) &&
-      !href.includes("icons.duckduckgo.com")
+      normalizeFaviconKey(host) === host &&
+      isAllowedFaviconHref(href)
     ))
+  );
+}
+
+function filterFaviconCacheForItems(items, cache) {
+  const hosts = collectBookmarkFaviconKeys(items);
+  const legacyHosts = collectBookmarkLegacyFaviconKeys(items);
+  return Object.fromEntries(
+    Object.entries(cache).filter(([host]) => hosts.has(host) || legacyHosts.has(host))
+  );
+}
+
+function pruneFaviconCache(cache) {
+  const entries = Object.entries(cache);
+  return Object.fromEntries(entries.slice(Math.max(0, entries.length - MAX_FAVICON_CACHE_ENTRIES)));
+}
+
+function normalizeFaviconKey(host) {
+  if (typeof host !== "string" || !host) {
+    return "";
+  }
+
+  try {
+    return new URL(`https://${host}`).host;
+  } catch {
+    return "";
+  }
+}
+
+function faviconKeyFromUrl(url) {
+  return url.host;
+}
+
+function collectBookmarkLegacyFaviconKeys(items, hosts = new Set()) {
+  for (const item of items ?? []) {
+    if (item.url) {
+      try {
+        const parsed = new URL(item.url);
+        if (/^https?:$/.test(parsed.protocol) && !parsed.port) {
+          hosts.add(parsed.hostname);
+        }
+      } catch {
+        // Ignore invalid bookmark URLs.
+      }
+    }
+    collectBookmarkLegacyFaviconKeys(item.children, hosts);
+  }
+  return hosts;
+}
+
+function isAllowedFaviconHref(href) {
+  return (
+    typeof href === "string" &&
+    (/^https?:\/\//.test(href) || /^data:image\//.test(href)) &&
+    href.length <= MAX_FAVICON_DATA_URL_LENGTH &&
+    !href.includes("icons.duckduckgo.com")
   );
 }
 
 function normalizeFolderIconMode(value) {
   return ["emoji", "folder", "both"].includes(value) ? value : "emoji";
+}
+
+function normalizeIconSizePreset(value) {
+  return ["small", "default", "large"].includes(value) ? value : "default";
+}
+
+function normalizeBookmarkOpenBehavior(value) {
+  return ["current-tab", "new-tab"].includes(value) ? value : "current-tab";
+}
+
+function normalizeBarPosition(value) {
+  return ["top", "bottom", "left", "right"].includes(value) ? value : "top";
+}
+
+function normalizeSpacingPreset(value) {
+  return ["compact", "default", "comfortable"].includes(value) ? value : "default";
 }
 
 function firstColor(...values) {

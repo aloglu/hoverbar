@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Hoverbar",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "A hover-revealed overlay bar for Firefox Bookmarks Toolbar items.",
   "permissions": [
     "bookmarks",
